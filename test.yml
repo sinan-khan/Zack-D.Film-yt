@@ -1,0 +1,54 @@
+name: Validate Pipeline
+
+# Runs on every push/PR and can be executed locally with `act` so you
+# never burn render minutes while developing. It exercises every stage
+# that does NOT need Blender, external APIs, or YouTube credentials.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Syntax-check every Python script
+        run: |
+          for f in scripts/**/*.py; do python -m py_compile "$f"; done
+
+      - name: Generate an offline story (no API keys needed)
+        run: python scripts/content/generate_story.py --prompt content/prompts/story-001.txt --out /tmp/story.json --no-llm
+
+      - name: Validate plan schema
+        run: |
+          python - <<'EOF'
+          import json
+          story = json.load(open("/tmp/story.json"))
+          assert story["title"], "no title"
+          assert len(story["scenes"]) >= 1, "no scenes"
+          for s in story["scenes"]:
+              assert s["narration"], "missing narration"
+              assert s["duration_seconds"] > 0, "bad duration"
+              assert s["camera"], "missing camera"
+          total = sum(s["duration_seconds"] for s in story["scenes"])
+          assert 40 <= total <= 240, f"total duration {total}s out of range"
+          print(f"OK: '{story['title']}' with {len(story['scenes'])} scenes, {total}s total")
+          EOF
+
+      - name: Check workflow files are valid YAML
+        run: |
+          python - <<'EOF'
+          import glob, yaml
+          for f in glob.glob(".github/workflows/*.yml"):
+              yaml.safe_load(open(f))
+              print(f"OK: {f}")
+          EOF
