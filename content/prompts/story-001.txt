@@ -1,0 +1,9 @@
+# Content idea for a Zack d. Films short 3D animated story.
+# Drop any story idea here, one per line. The pipeline reads the whole
+# file as a single prompt and expands it into a scene-by-scene plan.
+
+Write a 60 to 90 second cinematic short story for an animated 3D film
+channel. The story must have a clear beginning, middle and end, and a
+small emotional twist. Use 3 scenes. For each scene provide the exact
+narration voice-over text, the camera shot type, and a text prompt that
+can be turned into a humanoid 3D animation.
