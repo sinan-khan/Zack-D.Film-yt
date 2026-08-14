@@ -217,6 +217,32 @@ def setup_camera():
     log(f"camera placed at radius {radius:.2f} tracking scene centre")
 
 
+def animate_camera(total_frames):
+    """Slow push-in + gentle rise so scenes stay alive even if the
+    animation clip is shorter than the narration."""
+    if total_frames <= 2:
+        return
+    cam = bpy.context.scene.camera
+    if cam is None:
+        return
+    target = next((o for o in bpy.data.objects if o.name == "CameraTarget"), None)
+
+    cam.keyframe_insert(data_path="location", frame=1)
+    if target is not None:
+        target.keyframe_insert(data_path="location", frame=1)
+
+    direction = (cam.location - target.location).normalized() if target is not None else Vector((0.9, -0.9, 0.55)).normalized()
+    cam.location += direction * 0.6
+    cam.location.z += 0.2
+    if target is not None:
+        target.location.z += 0.4
+
+    cam.keyframe_insert(data_path="location", frame=total_frames)
+    if target is not None:
+        target.keyframe_insert(data_path="location", frame=total_frames)
+    log(f"camera drift over {total_frames} frames")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--story", required=True)
@@ -268,6 +294,7 @@ def main():
     setup_render(bpy.context.scene, args, cfg)
     bpy.context.scene.frame_start = 1
     bpy.context.scene.frame_end = max(frame_end, 2)
+    animate_camera(bpy.context.scene.frame_end)
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     log(f"rendering frames 1..{frame_end} -> {args.out}")
