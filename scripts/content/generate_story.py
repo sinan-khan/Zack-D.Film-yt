@@ -18,7 +18,7 @@ import sys
 import urllib.request
  
 SCHEMA_PROMPT = """You are the head writer for a 3D animated YouTube channel
-called "Zack d. Films" that publishes short cinematic stories (60-90 seconds).
+called "Zack d. Films" that publishes short cinematic stories (45-80 seconds).
  
 Turn the story idea into a complete production plan. Return ONLY valid JSON,
 no markdown, no commentary. The JSON must match exactly this shape:
