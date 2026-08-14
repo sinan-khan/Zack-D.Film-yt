@@ -10,7 +10,7 @@
 #
 # If nothing matches, `default_animation` is used.
 
-character_id: ""
+character_id: "e90a6228-9937-4a24-83f7-886adcfb0a0a"
 
 default_animation: "Idle"
 
