@@ -1,0 +1,65 @@
+# Mixamo motion catalog
+# ---------------------
+# Maps scene keywords (from the animation_prompt) to a Mixamo animation
+# name. The pipeline picks the first entry whose keyword appears in the
+# scene prompt/mood and downloads that animation from Mixamo's library,
+# baked onto your character.
+#
+# A scene can also force a specific clip by setting `animation_name` in
+# its story plan (see scripts/content/generate_story.py templates).
+#
+# If nothing matches, `default_animation` is used.
+
+character_id: ""
+
+default_animation: "Idle"
+
+catalog:
+  - keywords: [walking, walk, stroll, wander, pace, marching]
+    animation: "Walking"
+  - keywords: [running, run, jog, sprint, chasing, chase]
+    animation: "Running"
+  - keywords: [climbing, climb, stairs, ladder, ascending]
+    animation: "Climbing"
+  - keywords: [sitting, sit, crouch, squatting, kneel, kneeling, pray]
+    animation: "Sitting On Ground"
+  - keywords: [writing, write, notebook, signing, scribbling]
+    animation: "Writing"
+  - keywords: [talking, talk, speaking, conversing, explaining]
+    animation: "Talking"
+  - keywords: [thinking, think, pondering, contemplating]
+    animation: "Thinking"
+  - keywords: [pointing, point, directing, indicating]
+    animation: "Pointing"
+  - keywords: [waving, wave, greeting, hello, goodbye, farewell]
+    animation: "Waving"
+  - keywords: [jumping, jump, leaping, leap, hopping, hop]
+    animation: "Jumping"
+  - keywords: [dancing, dance]
+    animation: "Hip Hop Dancing"
+  - keywords: [throwing, throw, tossing]
+    animation: "Throwing"
+  - keywords: [catching, catch]
+    animation: "Catching"
+  - keywords: [pushing, push, shoving, shove]
+    animation: "Pushing"
+  - keywords: [pulling, pull, dragging, drag]
+    animation: "Pulling"
+  - keywords: [carrying, carry, holding, lifting, pick up]
+    animation: "Carrying"
+  - keywords: [falling, fall, tripping, trip, stumbling, stumble]
+    animation: "Falling To Ground"
+  - keywords: [leaning, lean, resting, leaning on wall]
+    animation: "Leaning On Wall"
+  - keywords: [opening, open, opening door, door]
+    animation: "Open Door"
+  - keywords: [punching, punch, hitting, fighting, fight, combat]
+    animation: "Punching"
+  - keywords: [stretching, stretch]
+    animation: "Stretching"
+  - keywords: [looking, look, watching, watch, staring, stare, viewing]
+    animation: "Looking Around"
+  - keywords: [standing, stand, idle, waiting, waiting, breathe]
+    animation: "Idle"
+  - keywords: [releasing, release, letting go, drop]
+    animation: "Idle"
