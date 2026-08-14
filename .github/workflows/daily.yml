@@ -112,7 +112,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: story-assets
-
+          path: staging
       - name: Restore plan and animation files
         run: |
           STORY_ID="${{ needs.prepare.outputs.story_id }}"
@@ -157,7 +157,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: story-assets
-
+          path: staging
       - name: Download all rendered scenes
         uses: actions/download-artifact@v4
         with:
