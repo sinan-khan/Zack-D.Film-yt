@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
 """Expand a story idea into a scene-by-scene production plan.
-
+ 
 Two modes:
   1. LLM mode (default if STORY_LLM_API_KEY is set): calls any
      OpenAI-compatible chat-completions API to write the story.
   2. Offline mode (--no-llm or no key): uses a built-in rotating set of
      pre-written micro-stories so the channel runs with zero API keys.
-
+ 
 Output: a JSON plan consumed by the render/tts/assembly steps.
 """
-
+ 
 import argparse
 import json
 import os
 import re
 import sys
 import urllib.request
-
+ 
 SCHEMA_PROMPT = """You are the head writer for a 3D animated YouTube channel
 called "Zack d. Films" that publishes short cinematic stories (60-90 seconds).
-
+ 
 Turn the story idea into a complete production plan. Return ONLY valid JSON,
 no markdown, no commentary. The JSON must match exactly this shape:
-
+ 
 {
   "title": "Short catchy title",
   "description": "2-3 sentence YouTube description",
@@ -40,18 +40,20 @@ no markdown, no commentary. The JSON must match exactly this shape:
     }
   ]
 }
-
+ 
 Rules:
 - 3 scenes per story, each 15-30 seconds, total 60-90 seconds.
 - narration must read naturally out loud (voice-over for TTS).
 - camera: use one of wide establishing shot / medium shot / close-up / over-the-shoulder / low angle.
 - animation_prompt: describe a single continuous humanoid motion for one
   character, present tense, no names, e.g. "a figure standing under a lamp post turning to look up".
-- animation_source: "text2motion" when the motion can be text-generated,
-  otherwise "assets" if it must come from a downloaded clip.
+- animation_source: "mixamo" when the motion can be matched by a common
+  animation clip (walk, run, sit, talk, wave, climb, write, point, look,
+  think, etc.), otherwise "text2motion" for novel motions. Optionally add
+  "animation_name" with a Mixamo clip name (e.g. "Walking", "Talking").
 """
-
-
+ 
+ 
 def read_config(path):
     if not os.path.exists(path):
         return {}
@@ -61,8 +63,8 @@ def read_config(path):
         return {}
     with open(path) as fh:
         return yaml.safe_load(fh) or {}
-
-
+ 
+ 
 def llm_call(prompt_text):
     key = os.environ.get("STORY_LLM_API_KEY", "").strip()
     if not key:
@@ -93,8 +95,8 @@ def llm_call(prompt_text):
     if start == -1 or end == -1:
         raise ValueError("LLM did not return JSON")
     return json.loads(content[start : end + 1])
-
-
+ 
+ 
 OFFLINE_STORIES = [
     {
         "title": "The Last Lighthouse",
@@ -109,7 +111,8 @@ OFFLINE_STORIES = [
                 "camera": "wide establishing shot",
                 "mood": "dusk, ocean, lighthouse",
                 "animation_prompt": "a figure climbing wooden stairs, then stopping at a window",
-                "animation_source": "text2motion",
+                "animation_name": "Climbing",
+                "animation_source": "mixamo",
             },
             {
                 "id": 1,
@@ -118,7 +121,8 @@ OFFLINE_STORIES = [
                 "camera": "medium shot",
                 "mood": "storm night, warm lamp glow",
                 "animation_prompt": "a figure shielding a flame with both hands, then lifting it high",
-                "animation_source": "text2motion",
+                "animation_name": "Stretching",
+                "animation_source": "mixamo",
             },
             {
                 "id": 2,
@@ -127,7 +131,8 @@ OFFLINE_STORIES = [
                 "camera": "close-up",
                 "mood": "dawn breaking over calm water",
                 "animation_prompt": "a figure standing still, looking out at the horizon",
-                "animation_source": "text2motion",
+                "animation_name": "Looking Around",
+                "animation_source": "mixamo",
             },
         ],
     },
@@ -144,7 +149,8 @@ OFFLINE_STORIES = [
                 "camera": "wide establishing shot",
                 "mood": "rainy city street, blue-grey light",
                 "animation_prompt": "a figure sitting on a curb, hands folding something carefully",
-                "animation_source": "text2motion",
+                "animation_name": "Sitting On Ground",
+                "animation_source": "mixamo",
             },
             {
                 "id": 1,
@@ -153,7 +159,8 @@ OFFLINE_STORIES = [
                 "camera": "low angle",
                 "mood": "raindrops, reflections, motion",
                 "animation_prompt": "a figure walking slowly beside a stream, watching it flow",
-                "animation_source": "text2motion",
+                "animation_name": "Walking",
+                "animation_source": "mixamo",
             },
             {
                 "id": 2,
@@ -162,7 +169,8 @@ OFFLINE_STORIES = [
                 "camera": "close-up",
                 "mood": "river mouth, golden light",
                 "animation_prompt": "a figure releasing something from an open palm and waving",
-                "animation_source": "text2motion",
+                "animation_name": "Waving",
+                "animation_source": "mixamo",
             },
         ],
     },
@@ -179,7 +187,8 @@ OFFLINE_STORIES = [
                 "camera": "medium shot",
                 "mood": "late night corner shop, neon glow",
                 "animation_prompt": "a figure standing behind a counter, looking up at a door",
-                "animation_source": "text2motion",
+                "animation_name": "Leaning On Wall",
+                "animation_source": "mixamo",
             },
             {
                 "id": 1,
@@ -188,7 +197,8 @@ OFFLINE_STORIES = [
                 "camera": "over-the-shoulder",
                 "mood": "warm shop interior, blue street outside",
                 "animation_prompt": "a figure leaning on a counter, talking with open hands",
-                "animation_source": "text2motion",
+                "animation_name": "Talking",
+                "animation_source": "mixamo",
             },
             {
                 "id": 2,
@@ -197,13 +207,14 @@ OFFLINE_STORIES = [
                 "camera": "close-up",
                 "mood": "dim warm light, dust in the air",
                 "animation_prompt": "a figure writing in a small notebook, then closing it gently",
-                "animation_source": "text2motion",
+                "animation_name": "Writing",
+                "animation_source": "mixamo",
             },
         ],
     },
 ]
-
-
+ 
+ 
 def offline_story(prompt_text, story_id):
     # Rotate by 12-hour window so each scheduled run (2/day) picks a
     # different template, cycling through all of them. With an LLM key
@@ -215,8 +226,8 @@ def offline_story(prompt_text, story_id):
     story["id"] = story_id
     story["source"] = "offline-template"
     return story
-
-
+ 
+ 
 def validate(plan):
     assert isinstance(plan.get("title"), str) and plan["title"], "missing title"
     assert isinstance(plan.get("scenes"), list) and len(plan["scenes"]) >= 1, "no scenes"
@@ -227,31 +238,31 @@ def validate(plan):
         scene.setdefault("camera", "medium shot")
         scene.setdefault("mood", "neutral studio")
         scene.setdefault("animation_prompt", "a figure standing and looking at the camera")
-        scene.setdefault("animation_source", "text2motion")
+        scene.setdefault("animation_source", "mixamo")
     total = sum(s["duration_seconds"] for s in plan["scenes"])
     if total > 240:
         scale = 240.0 / total
         for s in plan["scenes"]:
             s["duration_seconds"] = max(12, int(s["duration_seconds"] * scale))
     return plan
-
-
+ 
+ 
 def slugify(text):
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40]
-
-
+ 
+ 
 def main():
     ap = argparse.ArgumentParser(description="Generate a production plan JSON")
     ap.add_argument("--prompt", required=True, help="path to the story idea text file")
     ap.add_argument("--out", required=True, help="output JSON path")
     ap.add_argument("--no-llm", action="store_true", help="force offline template mode")
     args = ap.parse_args()
-
+ 
     with open(args.prompt) as fh:
         prompt_text = fh.read().strip()
-
+ 
     story_id = os.path.splitext(os.path.basename(args.prompt))[0]
-
+ 
     plan = None
     if not args.no_llm:
         try:
@@ -259,23 +270,23 @@ def main():
         except Exception as exc:  # pragma: no cover - depends on external API
             print(f"[generate_story] LLM failed ({exc}); using offline template", file=sys.stderr)
             plan = None
-
+ 
     if plan is None:
         plan = offline_story(prompt_text, story_id)
-
+ 
     plan = validate(plan)
     plan["id"] = story_id
     plan.setdefault("source", "llm")
-
+ 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w") as fh:
         json.dump(plan, fh, indent=2, ensure_ascii=False)
-
+ 
     for scene in plan["scenes"]:
         print(f"scene {scene['id']:>2}: {scene['duration_seconds']:>3}s  [{scene['camera']}] {scene['narration']}")
-
+ 
     print(f"[generate_story] wrote {args.out} (source={plan.get('source')}, scenes={len(plan['scenes'])})")
-
-
+ 
+ 
 if __name__ == "__main__":
     main()
