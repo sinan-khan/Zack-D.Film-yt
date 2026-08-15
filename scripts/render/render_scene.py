@@ -254,7 +254,7 @@ def main():
     ap.add_argument("--fps", type=int, default=24)
     ap.add_argument("--resolution-x", type=int, default=1920)
     ap.add_argument("--resolution-y", type=int, default=1080)
-    ap.add_argument("--engine", default="CYCLES")
+    ap.add_argument("--engine", default="BLENDER_EEVEE")  # EEVEE renders in seconds vs Cycles' path-traced minutes/frame on CPU-only runners
     ap.add_argument("--samples", type=int, default=64)
     ap.add_argument("--max-seconds", type=int, default=30)
 
