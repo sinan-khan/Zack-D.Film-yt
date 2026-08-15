@@ -46,6 +46,7 @@ def setup_render(scene_ctx, args, cfg):
     sc.render.resolution_y = args.resolution_y
     sc.render.fps = args.fps
     sc.render.fps_base = 1.0
+    sc.render.image_settings.media_type = "VIDEO"  # Blender 5.0: required before FFMPEG is a valid file_format
     sc.render.image_settings.file_format = "FFMPEG"
     sc.render.ffmpeg.format = "MPEG4"
     sc.render.ffmpeg.codec = "H264"
