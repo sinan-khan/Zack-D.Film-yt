@@ -68,13 +68,15 @@ def build_world(mood):
     nt = world.node_tree
     nt.nodes.clear()
     out = nt.nodes.new("ShaderNodeOutputWorld")
+    bg = nt.nodes.new("ShaderNodeBackground")
     tex = nt.nodes.new("ShaderNodeTexSky")
     tex.sky_type = "SINGLE_SCATTERING"  # Blender 5.0 renamed "NISHITA" to this
     tex.sun_elevation = 0.12 if "dusk" in mood or "night" in mood else 0.45
     tex.sun_rotation = -0.6
     if "storm" in mood or "rain" in mood:
         tex.sun_elevation = -0.15
-    nt.links.new(tex.outputs["Background"], out.inputs["Background"])
+    nt.links.new(tex.outputs["Color"], bg.inputs["Color"])
+    nt.links.new(bg.outputs["Background"], out.inputs["Surface"])
 
 
 def build_ground():
