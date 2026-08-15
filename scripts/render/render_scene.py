@@ -162,14 +162,14 @@ def build_placeholder_character(total_frames):
         obj.data.materials.append(mat)
         return obj
 
-    part("capsule_add", (0.75, 0.45, 0.28, 1.0), radius=0.32, depth=1.1, location=(0, 0, 1.25))
-    part("uv_sphere_add", (0.95, 0.75, 0.55, 1.0), radius=0.30, location=(0, 0, 2.2))
-    part("cylinder_add", (0.3, 0.3, 0.35, 1.0), radius=0.11, depth=1.0, location=(-0.14, 0, 0.5))
-    part("cylinder_add", (0.3, 0.3, 0.35, 1.0), radius=0.11, depth=1.0, location=(0.14, 0, 0.5))
-    part("cylinder_add", (0.5, 0.32, 0.22, 1.0), radius=0.09, depth=0.8, location=(-0.45, 0, 1.5), rotation=(0, 0, 0.12))
-    part("cylinder_add", (0.5, 0.32, 0.22, 1.0), radius=0.09, depth=0.8, location=(0.45, 0, 1.5), rotation=(0, 0, -0.12))
-    part("uv_sphere_add", (0.05, 0.05, 0.05, 1.0), radius=0.05, location=(-0.11, 0.26, 2.28))
-    part("uv_sphere_add", (0.05, 0.05, 0.05, 1.0), radius=0.05, location=(0.11, 0.26, 2.28))
+    part("cylinder", (0.75, 0.45, 0.28, 1.0), radius=0.32, depth=1.1, location=(0, 0, 1.25))  # torso (no native capsule primitive)
+    part("uv_sphere", (0.95, 0.75, 0.55, 1.0), radius=0.30, location=(0, 0, 2.2))
+    part("cylinder", (0.3, 0.3, 0.35, 1.0), radius=0.11, depth=1.0, location=(-0.14, 0, 0.5))
+    part("cylinder", (0.3, 0.3, 0.35, 1.0), radius=0.11, depth=1.0, location=(0.14, 0, 0.5))
+    part("cylinder", (0.5, 0.32, 0.22, 1.0), radius=0.09, depth=0.8, location=(-0.45, 0, 1.5), rotation=(0, 0, 0.12))
+    part("cylinder", (0.5, 0.32, 0.22, 1.0), radius=0.09, depth=0.8, location=(0.45, 0, 1.5), rotation=(0, 0, -0.12))
+    part("uv_sphere", (0.05, 0.05, 0.05, 1.0), radius=0.05, location=(-0.11, 0.26, 2.28))
+    part("uv_sphere", (0.05, 0.05, 0.05, 1.0), radius=0.05, location=(0.11, 0.26, 2.28))
 
     if total_frames > 2:
         root.rotation_euler = (0, 0, -0.12)
