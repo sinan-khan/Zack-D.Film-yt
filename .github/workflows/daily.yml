@@ -113,6 +113,7 @@ jobs:
         with:
           name: story-assets
           path: staging
+
       - name: Restore plan and animation files
         run: |
           STORY_ID="${{ needs.prepare.outputs.story_id }}"
@@ -141,7 +142,7 @@ jobs:
 
   assemble:
     name: Assemble final video + thumbnail
-    needs: render
+    needs: [prepare, render]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -158,6 +159,7 @@ jobs:
         with:
           name: story-assets
           path: staging
+
       - name: Download all rendered scenes
         uses: actions/download-artifact@v4
         with:
@@ -169,7 +171,7 @@ jobs:
           mkdir -p "content/stories" output/scenes output/audio
           cp staging/story.json "content/stories/${STORY_ID}.json"
           mv staging/audio/*.mp3 output/audio/
-          for d in scene-*; do mv "$d"/output/scenes/*.mp4 output/scenes/; done
+          for d in scene-*; do mv "$d"/*.mp4 output/scenes/; done
 
       - name: Composite scenes + narration + music
         run: python scripts/assembly/composite.py \
@@ -196,7 +198,7 @@ jobs:
 
   upload:
     name: Upload to YouTube
-    needs: assemble
+    needs: [prepare, assemble]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
