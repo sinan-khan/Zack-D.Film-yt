@@ -254,7 +254,13 @@ def main():
     ap.add_argument("--engine", default="CYCLES")
     ap.add_argument("--samples", type=int, default=64)
     ap.add_argument("--max-seconds", type=int, default=30)
-    args = ap.parse_args()
+
+    # Blender puts its own CLI (blender -b --python render_scene.py -- ...)
+    # into sys.argv untouched, so the script's own args have to be split
+    # out manually at the "--" separator.
+    argv = sys.argv
+    argv = argv[argv.index("--") + 1:] if "--" in argv else argv[1:]
+    args = ap.parse_args(argv)
 
     if bpy is None:
         sys.exit("[render] bpy is not available - run this inside Blender (see docstring)")
