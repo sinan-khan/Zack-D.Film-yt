@@ -119,7 +119,7 @@ def main():
         "categoryId": str(cfg.get("channel", {}).get("category_id", 22)),
     }
     status = {
-        "privacyStatus": youtube_cfg.get("privacy_status", "private"),
+        "privacyStatus": youtube_cfg.get("privacy_status", "public"),
         "selfDeclaredMadeForKids": bool(youtube_cfg.get("made_for_kids", False)),
     }
 
