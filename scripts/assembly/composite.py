@@ -34,7 +34,11 @@ def load_config(path):
 
 def run(cmd):
     print("[composite]", " ".join(cmd))
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        print("[composite] ffmpeg stderr:\n" + (e.stderr or "(empty)"))
+        raise
 
 
 def probe_duration(path):
@@ -44,6 +48,15 @@ def probe_duration(path):
         capture_output=True, text=True, check=True,
     )
     return float(out.stdout.strip())
+
+
+def has_audio_stream(path):
+    out = subprocess.run(
+        [FFPROBE, "-v", "error", "-select_streams", "a",
+         "-show_entries", "stream=index", "-of", "csv=p=0", path],
+        capture_output=True, text=True, check=True,
+    )
+    return bool(out.stdout.strip())
 
 
 def build_scene_segment(scene, scenes_dir, audio_dir, seg_dir):
@@ -113,23 +126,38 @@ def main():
 
     total = probe_duration(timeline)
     fade_out_start = max(0.0, total - 0.8)
+    narration = has_audio_stream(timeline)
 
     music = cfg.get("video", {}).get("music_file", "")
     if music and os.path.exists(music):
         mv = float(cfg.get("video", {}).get("music_volume", 0.12))
-        run([
-            FFMPEG, "-y",
-            "-i", timeline, "-i", music,
-            "-filter_complex",
-            f"[0:a]afade=t=in:st=0:d=0.3,afade=t=out:st={fade_out_start}:d=0.8[a0];"
-            f"[1:a]volume={mv},aloop=loop=-1:size=2e9,atrim=duration={total}[mu];"
-            f"[a0][mu]amix=inputs=2:duration=first:normalize=0[aout];"
-            f"[0:v]fade=t=in:st=0:d=0.4,fade=t=out:st={fade_out_start}:d=0.8[vout]",
-            "-map", "[vout]", "-map", "[aout]",
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-            "-c:a", "aac", "-b:a", "128k", args.out,
-        ])
-    else:
+        if narration:
+            run([
+                FFMPEG, "-y",
+                "-i", timeline, "-i", music,
+                "-filter_complex",
+                f"[0:a]afade=t=in:st=0:d=0.3,afade=t=out:st={fade_out_start}:d=0.8[a0];"
+                f"[1:a]volume={mv},aloop=loop=-1:size=2e9,atrim=duration={total}[mu];"
+                f"[a0][mu]amix=inputs=2:duration=first:normalize=0[aout];"
+                f"[0:v]fade=t=in:st=0:d=0.4,fade=t=out:st={fade_out_start}:d=0.8[vout]",
+                "-map", "[vout]", "-map", "[aout]",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                "-c:a", "aac", "-b:a", "128k", args.out,
+            ])
+        else:
+            # no narration track to mix in - music alone carries the audio
+            run([
+                FFMPEG, "-y",
+                "-i", timeline, "-i", music,
+                "-filter_complex",
+                f"[1:a]volume={mv},aloop=loop=-1:size=2e9,atrim=duration={total},"
+                f"afade=t=in:st=0:d=0.3,afade=t=out:st={fade_out_start}:d=0.8[aout];"
+                f"[0:v]fade=t=in:st=0:d=0.4,fade=t=out:st={fade_out_start}:d=0.8[vout]",
+                "-map", "[vout]", "-map", "[aout]",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                "-c:a", "aac", "-b:a", "128k", args.out,
+            ])
+    elif narration:
         run([
             FFMPEG, "-y",
             "-i", timeline,
@@ -139,6 +167,17 @@ def main():
             "-map", "[vout]", "-map", "[aout]",
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
             "-c:a", "aac", "-b:a", "128k", args.out,
+        ])
+    else:
+        # no narration, no music - video-only output, no audio stream to map
+        run([
+            FFMPEG, "-y",
+            "-i", timeline,
+            "-filter_complex",
+            f"[0:v]fade=t=in:st=0:d=0.4,fade=t=out:st={fade_out_start}:d=0.8[vout]",
+            "-map", "[vout]",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+            "-an", args.out,
         ])
 
     print(f"[composite] final video -> {args.out} ({total:.1f}s)")
