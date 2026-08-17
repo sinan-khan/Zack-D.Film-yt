@@ -19,6 +19,7 @@ import base64
 import json
 import os
 import sys
+import traceback
 
 
 def load_config(path):
@@ -83,7 +84,14 @@ def build_credentials():
 
     creds = Credentials.from_authorized_user_info(token_json, SCOPES)
     if creds.expired and creds.refresh_token:
-        creds.refresh(Request())
+        print("[upload] Token expired, refreshing...")
+        try:
+            creds.refresh(Request())
+            print("[upload] Token refreshed successfully")
+        except Exception as exc:
+            print(f"[upload] ERROR: Token refresh failed: {exc}")
+            traceback.print_exc()
+            sys.exit(f"[upload] Cannot refresh YouTube credentials: {exc}")
     return creds
 
 
@@ -97,6 +105,9 @@ def main():
 
     if not os.path.exists(args.video):
         sys.exit(f"[upload] video not found: {args.video}")
+
+    print(f"[upload] Starting upload for video: {args.video}")
+    print(f"[upload] Video size: {os.path.getsize(args.video) / (1024*1024):.1f} MB")
 
     cfg = load_config(args.config)
     with open(args.story) as fh:
@@ -123,39 +134,63 @@ def main():
         "selfDeclaredMadeForKids": bool(youtube_cfg.get("made_for_kids", False)),
     }
 
-    creds = build_credentials()
-    from googleapiclient.discovery import build
-    from googleapiclient.http import MediaFileUpload
+    print(f"[upload] Title: {title}")
+    print(f"[upload] Privacy: {status['privacyStatus']}")
 
-    youtube = build("youtube", "v3", credentials=creds, cache_discovery=False)
-    media = MediaFileUpload(args.video, chunksize=8 * 1024 * 1024, resumable=True)
+    try:
+        creds = build_credentials()
+        print("[upload] Credentials loaded successfully")
+    except Exception as exc:
+        print(f"[upload] FATAL: Failed to build credentials: {exc}")
+        traceback.print_exc()
+        sys.exit(1)
 
-    request = youtube.videos().insert(
-        part="snippet,status",
-        body={"snippet": snippet, "status": status},
-        media_body=media,
-    )
+    try:
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaFileUpload
 
-    response = None
-    while response is None:
-        _status, response = request.next_chunk()
+        youtube = build("youtube", "v3", credentials=creds, cache_discovery=False)
+        media = MediaFileUpload(args.video, chunksize=8 * 1024 * 1024, resumable=True)
 
-    video_id = response.get("id")
-    print(f"[upload] uploaded video id={video_id}")
-    print(f"[upload] https://www.youtube.com/watch?v={video_id}")
-    print(f"[upload] privacyStatus={response.get('status', {}).get('privacyStatus')}")
+        print("[upload] Uploading to YouTube...")
+        request = youtube.videos().insert(
+            part="snippet,status",
+            body={"snippet": snippet, "status": status},
+            media_body=media,
+        )
 
-    if args.thumbnail and os.path.exists(args.thumbnail):
-        try:
-            youtube.thumbnails().set(
-                videoId=video_id,
-                media_body=MediaFileUpload(args.thumbnail),
-            ).execute()
-            print(f"[upload] thumbnail set -> {args.thumbnail}")
-        except Exception as exc:
-            print(f"[upload] WARNING: thumbnail failed ({exc}); video still uploaded")
+        response = None
+        while response is None:
+            try:
+                _status, response = request.next_chunk()
+                if _status:
+                    print(f"[upload] Upload progress: {int(_status.progress() * 100)}%")
+            except Exception as chunk_error:
+                print(f"[upload] ERROR during upload chunk: {chunk_error}")
+                traceback.print_exc()
+                raise
 
-    return video_id
+        video_id = response.get("id")
+        print(f"[upload] SUCCESS: uploaded video id={video_id}")
+        print(f"[upload] https://www.youtube.com/watch?v={video_id}")
+        print(f"[upload] privacyStatus={response.get('status', {}).get('privacyStatus')}")
+
+        if args.thumbnail and os.path.exists(args.thumbnail):
+            try:
+                youtube.thumbnails().set(
+                    videoId=video_id,
+                    media_body=MediaFileUpload(args.thumbnail),
+                ).execute()
+                print(f"[upload] thumbnail set -> {args.thumbnail}")
+            except Exception as exc:
+                print(f"[upload] WARNING: thumbnail failed ({exc}); video still uploaded")
+
+        return video_id
+
+    except Exception as exc:
+        print(f"[upload] FATAL ERROR: {exc}")
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
