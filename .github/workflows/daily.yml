@@ -121,6 +121,12 @@ jobs:
           cp staging/story.json "content/stories/${STORY_ID}.json"
           if [ -d "staging/animations" ]; then cp -r staging/animations/* assets/animations/; fi
 
+      - name: Download character model
+        run: |
+          mkdir -p assets/characters
+          curl -sL -o assets/characters/hero.fbx \
+            "https://github.com/sinan33644061-lab/Zack-D.Film-yt/releases/download/hero.fbx/hero.fbx.fbx"
+
       - name: Render scene with Blender (containerized)
         run: |
           STORY_ID="${{ needs.prepare.outputs.story_id }}"
