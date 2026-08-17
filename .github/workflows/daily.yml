@@ -179,14 +179,16 @@ jobs:
           for d in scene-*; do mv "$d"/*.mp4 output/scenes/; done
 
       - name: Composite scenes + narration + music
-        run: python scripts/assembly/composite.py \
+        run: |
+          python scripts/assembly/composite.py \
             --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" \
             --audio output/audio \
             --scenes output/scenes \
             --out output/final.mp4
 
       - name: Generate thumbnail
-        run: python scripts/assembly/thumbnail.py \
+        run: |
+          python scripts/assembly/thumbnail.py \
             --video output/final.mp4 \
             --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" \
             --out output/thumbnail.jpg
@@ -221,7 +223,8 @@ jobs:
           name: final
 
       - name: Upload video to YouTube
-        run: python scripts/upload/upload_youtube.py \
+        run: |
+          python scripts/upload/upload_youtube.py \
             --video output/final.mp4 \
             --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" \
             --thumbnail output/thumbnail.jpg
