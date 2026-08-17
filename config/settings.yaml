@@ -5,7 +5,7 @@ channel:
 
 youtube:
   # private = upload but keep hidden for review, unlisted = link-only, public = live on channel
-  privacy_status: "puplic"
+  privacy_status: "public"
   made_for_kids: false
 
 video:
