@@ -32,9 +32,23 @@ def write_secret_file(env_name, fallback_path):
     if not value:
         return fallback_path if os.path.exists(fallback_path) else None
     try:
-        data = base64.b64decode(value)
+        data = base64.b64decode(value, validate=True)
     except Exception as exc:
-        sys.exit(f"[upload] {env_name} is not valid base64: {exc}")
+        sys.exit(
+            f"[upload] {env_name} is not valid base64: {exc}\n"
+            "[upload] check the secret was pasted as one unbroken line with "
+            "no extra characters (e.g. PEM headers, line wraps)."
+        )
+    try:
+        json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        sys.exit(
+            f"[upload] {env_name} decoded from base64 but is not valid JSON "
+            f"({exc}).\n[upload] this usually means the base64 string was "
+            "corrupted when copied into the GitHub secret - re-copy the "
+            "single-line output directly from the terminal (not a "
+            "line-wrapped display) and re-paste it as the secret value."
+        )
     os.makedirs(os.path.dirname(fallback_path) or ".", exist_ok=True)
     with open(fallback_path, "wb") as fh:
         fh.write(data)
@@ -43,7 +57,7 @@ def write_secret_file(env_name, fallback_path):
 
 def build_credentials():
     from google.oauth2.credentials import Credentials
-    from google_auth_oauthlib.flow import InstalledAppFlow
+    from google.auth.transport.requests import Request
 
     SCOPES = [
         "https://www.googleapis.com/auth/youtube.upload",
@@ -58,23 +72,19 @@ def build_credentials():
     if not token:
         sys.exit("[upload] YOUTUBE_TOKEN_JSON not set and no secrets/token.json")
 
+    # client_config isn't needed for the credential object itself (token.json
+    # already embeds client_id/client_secret/token_uri from the original
+    # consent flow), but we still require the secret to exist/parse so a
+    # broken client_secret.json is caught early with a clear error.
     with open(secret) as fh:
-        client_config = json.load(fh)
+        json.load(fh)
     with open(token) as fh:
         token_json = json.load(fh)
 
     creds = Credentials.from_authorized_user_info(token_json, SCOPES)
-    if creds.refresh_token:
-        from google.auth.transport.requests import Request
+    if creds.expired and creds.refresh_token:
         creds.refresh(Request())
-
-    flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
-    flow.oauth2session.token = creds.token
-    flow.oauth2session.refresh_token = creds.refresh_token
-    flow.oauth2session.token_uri = creds.token_uri
-    flow.oauth2session.client_id = creds.client_id
-    flow.oauth2session.client_secret = creds.client_secret
-    return flow.credentials
+    return creds
 
 
 def main():
