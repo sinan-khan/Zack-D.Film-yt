@@ -44,22 +44,35 @@ def log(msg):
 
 def setup_render(scene_ctx, args, cfg):
     sc = bpy.context.scene
-    sc.render.engine = args.engine.upper()
-    if args.engine.upper() == "CYCLES":
+    
+    # Ensure cycles addon is loaded
+    bpy.ops.preferences.addon_enable(module="cycles")
+    
+    # Force Cycles or ensure upper check handles default
+    engine_name = getattr(args, "engine", "CYCLES").upper()
+    if engine_name not in ["CYCLES", "BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"]:
+        engine_name = "CYCLES"
+
+    sc.render.engine = engine_name
+    
+    if sc.render.engine == "CYCLES":
         sc.cycles.samples = cfg.get("samples", 64)
         sc.cycles.device = cfg.get("device", "CPU")
+        
     sc.render.resolution_x = args.resolution_x
     sc.render.resolution_y = args.resolution_y
     sc.render.fps = args.fps
     sc.render.fps_base = 1.0
-    sc.render.image_settings.media_type = "VIDEO"  # Blender 5.0: required before FFMPEG is a valid file_format
+    sc.render.image_settings.media_type = "VIDEO"
     sc.render.image_settings.file_format = "FFMPEG"
     sc.render.ffmpeg.format = "MPEG4"
     sc.render.ffmpeg.codec = "H264"
     sc.render.ffmpeg.constant_rate_factor = cfg.get("ffmpeg_crf", "HIGH")
     sc.render.ffmpeg.audio_codec = "NONE"
     sc.render.filepath = args.out
-    log(f"engine={sc.render.engine} samples={sc.cycles.samples} "
+    
+    samples_info = sc.cycles.samples if sc.render.engine == "CYCLES" else "N/A"
+    log(f"engine={sc.render.engine} samples={samples_info} "
         f"{args.resolution_x}x{args.resolution_y}@{args.fps}fps")
 
 
