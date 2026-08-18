@@ -67,6 +67,7 @@ def build_scene_segment(scene, scenes_dir, audio_dir, seg_dir):
     if not os.path.exists(raw):
         sys.exit(f"[composite] missing rendered scene {raw}")
     dur = scene.get("duration_seconds", 20)
+    probe_and_log("source scene", raw)
 
     if os.path.exists(mp3):
         run([
@@ -91,7 +92,19 @@ def build_scene_segment(scene, scenes_dir, audio_dir, seg_dir):
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
             "-an", target,
         ])
+    probe_and_log("built segment", target)
     return target
+
+
+def probe_and_log(label, path):
+    try:
+        d = probe_duration(path)
+        s = os.path.getsize(path)
+        print(f"[composite] {label}: {path} -> {d:.2f}s, {s / 1024:.0f} KB")
+        return d
+    except Exception as exc:
+        print(f"[composite] {label}: {path} -> probe failed: {exc}")
+        return None
 
 
 def main():
@@ -123,8 +136,21 @@ def main():
     timeline = os.path.join(os.path.dirname(args.out), "_timeline.mp4")
     run([FFMPEG, "-y", "-f", "concat", "-safe", "0", "-i", list_file,
          "-c", "copy", "-movflags", "+faststart", timeline])
+    total = probe_and_log("concatenated timeline", timeline)
+    if total is None:
+        total = 0.0
 
-    total = probe_duration(timeline)
+    expected = sum(float(s.get("duration_seconds", 20)) for s in story["scenes"])
+    if total < expected * 0.5:
+        sys.exit(
+            f"[composite] ERROR: concatenated timeline is {total:.2f}s but "
+            f"segments summed to ~{expected:.1f}s - the concat step (-c copy) "
+            "silently truncated the output, most likely because the segment "
+            "files aren't stream-copy-compatible (mismatched codec params "
+            "between scene renders). Re-encoding instead of stream-copying "
+            "the concat step is the likely fix."
+        )
+
     fade_out_start = max(0.0, total - 0.8)
     narration = has_audio_stream(timeline)
 
