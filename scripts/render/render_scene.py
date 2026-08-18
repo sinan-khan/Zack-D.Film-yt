@@ -31,6 +31,12 @@ except ImportError:  # running outside Blender
     bpy = None
     Vector = None
 
+if bpy:
+    # Set render engine to Cycles CPU for headless rendering
+    bpy.context.scene.render.engine = 'CYCLES'
+    bpy.context.scene.cycles.device = 'CPU'
+    bpy.context.scene.cycles.samples = 64  # Adjust sample count for speed vs quality
+
 
 def log(msg):
     print(f"[render] {msg}", flush=True)
