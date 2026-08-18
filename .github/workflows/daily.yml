@@ -244,7 +244,4 @@ jobs:
             --video output/final.mp4 \
             --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" \
             --thumbnail output/thumbnail.jpg
-      - name: Debug - list available Groq models
-        env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-        run: curl https://api.groq.com/openai/v1/models -H "Authorization: Bearer $GROQ_API_KEY"
+            
