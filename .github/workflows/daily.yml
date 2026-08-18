@@ -134,12 +134,9 @@ jobs:
         run: |
           STORY_ID="${{ needs.prepare.outputs.story_id }}"
           docker run --rm -v "$PWD:/work" -w /work \
-            blendergrid/blender:latest \
-            -b --python-exit-code 1 --python scripts/render/render_scene.py -- \
-            --story "content/stories/${STORY_ID}.json" \
-            --scene ${{ matrix.scene }} \
-            --out "output/scenes/scene${{ matrix.scene }}.mp4" \
-            --fps 24
+            --entrypoint /bin/sh \
+            blendergrid/blender:latest -c \
+            "apt-get update && apt-get install -y xvfb && xvfb-run -a blender -b --python-exit-code 1 --python scripts/render/render_scene.py -- --story \"content/stories/${STORY_ID}.json\" --scene ${{ matrix.scene }} --out \"output/scenes/scene${{ matrix.scene }}.mp4\" --fps 24"
 
       - name: Upload rendered scene
         uses: actions/upload-artifact@v4
@@ -244,4 +241,3 @@ jobs:
             --video output/final.mp4 \
             --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" \
             --thumbnail output/thumbnail.jpg
-                 
