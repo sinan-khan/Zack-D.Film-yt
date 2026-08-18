@@ -288,16 +288,18 @@ def main():
     duration = min(duration, args.max_seconds)
     frame_end = int(duration * args.fps)
 
-    loaded = load_fbx(animation_file)
-    if loaded is None:
-        loaded = load_fbx(character_file)
-    if loaded is None:
+    has_animation_clip = load_fbx(animation_file) is not None
+    has_character = has_animation_clip or load_fbx(character_file) is not None
+    if not has_character:
         build_placeholder_character(frame_end)
 
-    clip_end = animation_frame_range()
-    if clip_end > 1:
-        frame_end = min(frame_end, clip_end)
-        log(f"clip length = {clip_end} frames, scene capped to {frame_end}")
+    if has_animation_clip:
+        clip_end = animation_frame_range()
+        if clip_end > 1:
+            frame_end = min(frame_end, clip_end)
+            log(f"clip length = {clip_end} frames, scene capped to {frame_end}")
+    else:
+        log(f"no standalone animation clip - using full scene length of {frame_end} frames")
 
     setup_camera()
     setup_render(bpy.context.scene, args, cfg)
