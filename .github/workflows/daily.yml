@@ -228,6 +228,16 @@ jobs:
         with:
           name: final
 
+      - name: Verify downloaded video size
+        run: |
+          ls -la output/
+          SIZE=$(stat -c%s output/final.mp4 2>/dev/null || echo 0)
+          echo "downloaded output/final.mp4 is $SIZE bytes"
+          if [ "$SIZE" -lt 100000 ]; then
+            echo "::error::output/final.mp4 is only $SIZE bytes after artifact download - the assemble job's output did not survive the artifact round-trip"
+            exit 1
+          fi
+
       - name: Upload video to YouTube
         run: |
           python scripts/upload/upload_youtube.py \
