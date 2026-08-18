@@ -130,13 +130,10 @@ jobs:
           curl -sL -o assets/characters/hero.fbx \
             "https://github.com/sinan33644061-lab/Zack-D.Film-yt/releases/download/hero.fbx/hero.fbx.fbx"
 
-      - name: Install xvfb on runner
-        run: sudo apt-get update && sudo apt-get install -y xvfb
-
       - name: Render scene with Blender (containerized)
         run: |
           STORY_ID="${{ needs.prepare.outputs.story_id }}"
-          xvfb-run -a docker run --rm -v "$PWD:/work" -w /work \
+          docker run --rm -v "$PWD:/work" -w /work \
             blendergrid/blender:latest \
             -b --python-exit-code 1 --python scripts/render/render_scene.py -- \
             --story "content/stories/${STORY_ID}.json" \
