@@ -180,7 +180,15 @@ def main():
             "-an", args.out,
         ])
 
-    print(f"[composite] final video -> {args.out} ({total:.1f}s)")
+    out_size = os.path.getsize(args.out) if os.path.exists(args.out) else 0
+    print(f"[composite] final video -> {args.out} ({total:.1f}s, {out_size / 1024:.0f} KB)")
+    if out_size < 100_000:
+        sys.exit(
+            f"[composite] ERROR: {args.out} is only {out_size} bytes - ffmpeg "
+            "exited cleanly but produced a near-empty file. Not treating this "
+            "as success; check the segment/timeline files above for the real "
+            "problem instead of letting a broken video reach upload."
+        )
 
 
 if __name__ == "__main__":
