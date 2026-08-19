@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Headless Blender renderer for one story scene."""
+"""Fast headless Blender renderer for one story scene."""
 import argparse
 import json
 import os
@@ -152,7 +152,6 @@ def setup_camera(camera_type):
     constraint.target = target
     constraint.track_axis = "TRACK_NEGATIVE_Z"
     constraint.up_axis = "UP_Y"
-    log(f"camera={camera_type!r} lens={lens} distance={distance:.1f}")
     return cam, target
 
 
@@ -178,11 +177,16 @@ def setup_render(args, frame_dir):
     sc.render.resolution_y = args.resolution_y
     sc.render.resolution_percentage = 100
     sc.render.fps = args.fps
-    # Blender 5.0 removed FFMPEG from image_settings.file_format. Render a
-    # numbered PNG sequence first, then encode it with the system ffmpeg.
-    sc.render.image_settings.file_format = "PNG"
+    # Fast CI path: JPEG frames drastically reduce disk I/O versus PNG.
+    sc.render.image_settings.file_format = "JPEG"
+    sc.render.image_settings.quality = 90
     sc.render.filepath = os.path.join(frame_dir, "frame")
-    log(f"engine={engine} {args.resolution_x}x{args.resolution_y}@{args.fps}; frame_dir={frame_dir}")
+    if engine == "BLENDER_EEVEE":
+        try:
+            sc.eevee.taa_render_samples = args.samples
+        except AttributeError:
+            pass
+    log(f"engine={engine} {args.resolution_x}x{args.resolution_y}@{args.fps}; samples={args.samples}")
 
 
 def animate_camera(cam, target, total_frames):
@@ -197,16 +201,16 @@ def animate_camera(cam, target, total_frames):
 
 
 def encode_video(frame_dir, out, fps):
-    frames = sorted(name for name in os.listdir(frame_dir) if name.lower().endswith(".png"))
+    frames = sorted(name for name in os.listdir(frame_dir) if name.lower().endswith((".jpg", ".jpeg")))
     if not frames:
-        raise RuntimeError(f"Blender produced no PNG frames in {frame_dir}")
+        raise RuntimeError(f"Blender produced no JPEG frames in {frame_dir}")
     if shutil.which("ffmpeg") is None:
-        raise RuntimeError("ffmpeg is required to encode the rendered PNG sequence")
+        raise RuntimeError("ffmpeg is required to encode the rendered JPEG sequence")
     cmd = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-framerate", str(fps),
-        "-i", os.path.join(frame_dir, "frame%04d.png"),
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+        "-i", os.path.join(frame_dir, "frame%04d.jpg"),
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
         "-pix_fmt", "yuv420p", "-movflags", "+faststart", out,
     ]
     log(f"encoding {len(frames)} frames to {out}")
@@ -220,11 +224,11 @@ def main():
     ap.add_argument("--story", required=True)
     ap.add_argument("--scene", required=True, type=int)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--fps", type=int, default=24)
-    ap.add_argument("--resolution-x", type=int, default=1080)
-    ap.add_argument("--resolution-y", type=int, default=1920)
+    ap.add_argument("--fps", type=int, default=15)
+    ap.add_argument("--resolution-x", type=int, default=540)
+    ap.add_argument("--resolution-y", type=int, default=960)
     ap.add_argument("--engine", default="BLENDER_EEVEE")
-    ap.add_argument("--samples", type=int, default=32)
+    ap.add_argument("--samples", type=int, default=8)
     ap.add_argument("--max-seconds", type=int, default=90)
     argv = sys.argv
     argv = argv[argv.index("--") + 1:] if "--" in argv else argv[1:]
@@ -259,7 +263,7 @@ def main():
     os.makedirs(frame_dir, exist_ok=True)
     try:
         setup_render(args, frame_dir)
-        log(f"rendering scene {scene['id']} for {duration}s ({total_frames} frames)")
+        log(f"rendering scene {scene['id']} for {duration}s ({total_frames} low-res frames; final upscale happens later)")
         bpy.ops.render.render(animation=True)
         encode_video(frame_dir, args.out, args.fps)
     finally:
