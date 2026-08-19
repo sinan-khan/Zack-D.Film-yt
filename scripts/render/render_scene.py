@@ -80,6 +80,15 @@ def main():
  if not (load_fbx(af) or load_fbx(cf)): build_placeholder(total)
  bpy.context.scene.frame_start=1; bpy.context.scene.frame_end=total; cam,t=setup_camera(scene.get("camera","medium shot")); cam.keyframe_insert(data_path="location",frame=1); t.keyframe_insert(data_path="location",frame=1); cam.location=cam.location*.94; t.location.z+=.15; cam.keyframe_insert(data_path="location",frame=total); t.keyframe_insert(data_path="location",frame=total)
  os.makedirs(os.path.dirname(args.out) or ".",exist_ok=True); fd=os.path.join(os.path.dirname(args.out) or ".",f".frames_scene{scene['id']}"); shutil.rmtree(fd,ignore_errors=True); os.makedirs(fd); setup_render(args,fd); log(f"rendering scene {scene['id']} for {duration}s ({total} low-res frames)"); bpy.ops.render.render(animation=True)
+ # The Blender Docker image runs as root. Make the host-mounted frame directory
+ # removable by the non-root GitHub runner after rendering completes.
+ try:
+  os.chmod(fd,0o777)
+  for name in os.listdir(fd):
+   try: os.chmod(os.path.join(fd,name),0o666)
+   except OSError: pass
+ except OSError as e:
+  log(f"WARNING: could not relax frame permissions: {e}")
  if args.no_encode: log(f"frames ready: {fd}")
  else: raise RuntimeError("Direct encoding is disabled in CI; use --no-encode and host FFmpeg")
 if __name__=="__main__": main()
