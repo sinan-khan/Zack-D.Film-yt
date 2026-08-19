@@ -40,14 +40,18 @@ jobs:
         run: pip install -r requirements.txt
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - name: Pick today's story prompt
+      - name: Pick rotating story prompt
         id: plan
         run: |
-          STORY=$(find content/prompts -maxdepth 1 -type f -name '*.txt' | sort | head -n1)
-          test -n "$STORY" || { echo "No story prompt found"; exit 1; }
-          STORY_ID=$(basename "$STORY" .txt)
+          mapfile -t PROMPTS < <(find content/prompts -maxdepth 1 -type f -name '*.txt' | sort)
+          COUNT=${#PROMPTS[@]}
+          test "$COUNT" -gt 0 || { echo "No story prompts found"; exit 1; }
+          INDEX=$(( $(date -u +%s) / 43200 % COUNT ))
+          STORY="${PROMPTS[$INDEX]}"
+          STORY_ID="$(basename "$STORY" .txt)-$(date -u +%Y%m%d-%H%M)"
           echo "story_id=${STORY_ID}" >> "$GITHUB_OUTPUT"
           echo "STORY=${STORY}" >> "$GITHUB_ENV"
+          echo "Using prompt: $STORY"
       - name: Generate production plan (LLM or offline fallback)
         run: python scripts/content/generate_story.py --prompt "$STORY" --out staging/story.json
       - name: Generate voice-over narration
@@ -180,8 +184,14 @@ jobs:
         run: |
           test -s output/final.mp4
           test -s output/thumbnail.jpg
-          ffprobe -v error -show_entries stream=width,height -of csv=p=0 output/final.mp4
-          ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 output/final.mp4
+          DIMENSIONS=$(ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 output/final.mp4)
+          echo "Video dimensions: $DIMENSIONS"
+          test "$DIMENSIONS" = "1080,1920"
+          DURATION=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 output/final.mp4)
+          python - <<PY
+          d=float("$DURATION")
+          assert 40 <= d <= 90, f"Final duration {d:.2f}s is outside Shorts target"
+          PY
       - name: Upload final package
         uses: actions/upload-artifact@v4
         with:
