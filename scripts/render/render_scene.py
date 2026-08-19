@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Headless Blender renderer for one story scene.
-
-The scene duration is authoritative: narration/planning determines the
-length, while an animation clip is allowed to finish early and hold its last
-pose instead of truncating the video.
-"""
+"""Headless Blender renderer for one story scene."""
 import argparse
 import json
 import os
@@ -66,7 +61,6 @@ def build_lights(mood):
     sun.rotation_euler = (0.7, -0.3, -0.6)
     sun_data.energy = 1.0 if night else 2.5
     sun_data.angle = 1.0
-
     fill_data = bpy.data.lights.new("Fill", "AREA")
     fill = bpy.data.objects.new("Fill", fill_data)
     bpy.context.collection.objects.link(fill)
@@ -108,7 +102,6 @@ def build_placeholder(total_frames):
     part("cylinder", (0.14, 0, 0.45), (0.10, 0.10, 0.5), (0.15, 0.15, 0.18, 1))
     part("cylinder", (-0.42, 0, 1.45), (0.08, 0.08, 0.4), (0.45, 0.28, 0.18, 1))
     part("cylinder", (0.42, 0, 1.45), (0.08, 0.08, 0.4), (0.45, 0.28, 0.18, 1))
-
     if total_frames > 2:
         for frame, angle in ((1, -0.08), (total_frames // 2, 0.08), (total_frames, -0.08)):
             root.rotation_euler.z = angle
@@ -136,11 +129,9 @@ def setup_camera(camera_type):
     cam = bpy.data.objects.new("Camera", cam_data)
     bpy.context.collection.objects.link(cam)
     bpy.context.scene.camera = cam
-
     target = bpy.data.objects.new("CameraTarget", None)
     bpy.context.collection.objects.link(target)
     target.location = center + Vector((0, 0, radius * 0.15))
-
     kind = (camera_type or "medium shot").lower()
     if "close" in kind:
         distance, height, lens = radius * 2.0, radius * 0.45, 65
@@ -152,7 +143,6 @@ def setup_camera(camera_type):
         distance, height, lens = radius * 5.0, radius * 0.8, 42
     else:
         distance, height, lens = radius * 3.2, radius * 0.55, 52
-
     cam_data.lens = lens
     cam.location = target.location + Vector((distance * 0.85, -distance, height))
     cam.rotation_euler = (target.location - cam.location).to_track_quat("-Z", "Y").to_euler()
@@ -160,7 +150,6 @@ def setup_camera(camera_type):
     constraint.target = target
     constraint.track_axis = "TRACK_NEGATIVE_Z"
     constraint.up_axis = "UP_Y"
-
     log(f"camera={camera_type!r} lens={lens} distance={distance:.1f}")
     return cam, target
 
@@ -168,23 +157,26 @@ def setup_camera(camera_type):
 def setup_render(args):
     sc = bpy.context.scene
     requested = args.engine.upper()
-    # Blender 5.0 exposes EEVEE as BLENDER_EEVEE. Newer builds may expose
-    # BLENDER_EEVEE_NEXT. Resolve against the actual enum values so the
-    # pipeline remains compatible with the container image in use.
-    available = {item.identifier for item in sc.bl_rna.properties["render"].enum_items if False}
-    # The render.engine enum is exposed on the property itself.
-    engine_items = {item.identifier for item in sc.bl_rna.properties["render"].enum_items} if hasattr(sc.bl_rna.properties["render"], "enum_items") else set()
-    if not engine_items:
-        engine_items = {"CYCLES", "BLENDER_EEVEE", "BLENDER_WORKBENCH"}
-    aliases = {
-        "BLENDER_EEVEE_NEXT": "BLENDER_EEVEE" if "BLENDER_EEVEE" in engine_items else "BLENDER_EEVEE_NEXT",
-        "EEVEE_NEXT": "BLENDER_EEVEE" if "BLENDER_EEVEE" in engine_items else "BLENDER_EEVEE_NEXT",
-        "EEVEE": "BLENDER_EEVEE" if "BLENDER_EEVEE" in engine_items else "BLENDER_EEVEE_NEXT",
-    }
-    engine = aliases.get(requested, requested)
-    if engine not in engine_items:
-        engine = "BLENDER_EEVEE" if "BLENDER_EEVEE" in engine_items else next(iter(engine_items))
-    sc.render.engine = engine
+    candidates = []
+    if requested in ("BLENDER_EEVEE_NEXT", "EEVEE_NEXT", "EEVEE"):
+        # Blender 5.0 calls this BLENDER_EEVEE; newer Blender builds may use
+        # BLENDER_EEVEE_NEXT. Try the installed version rather than assuming.
+        candidates = ["BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"]
+    else:
+        candidates = [requested]
+
+    engine = None
+    last_error = None
+    for candidate in candidates:
+        try:
+            sc.render.engine = candidate
+            engine = candidate
+            break
+        except TypeError as exc:
+            last_error = exc
+    if engine is None:
+        raise RuntimeError(f"No compatible Blender render engine for {requested}: {last_error}")
+
     if engine == "CYCLES":
         sc.cycles.device = "CPU"
         sc.cycles.samples = args.samples
@@ -223,41 +215,33 @@ def main():
     ap.add_argument("--engine", default="BLENDER_EEVEE")
     ap.add_argument("--samples", type=int, default=32)
     ap.add_argument("--max-seconds", type=int, default=90)
-
     argv = sys.argv
     argv = argv[argv.index("--") + 1:] if "--" in argv else argv[1:]
     args = ap.parse_args(argv)
     if bpy is None:
         sys.exit("[render] bpy is not available; run inside Blender")
-
     with open(args.story) as fh:
         story = json.load(fh)
     scene = story["scenes"][args.scene]
     duration = max(1, min(int(scene.get("duration_seconds", 20)), args.max_seconds))
     total_frames = max(2, int(duration * args.fps))
-
     clear_scene()
     mood = scene.get("mood", "neutral")
     build_world(mood)
     build_ground()
     build_lights(mood)
-
     anim_dir = os.path.join("assets", "animations", story.get("id", "story"))
     animation_file = scene.get("animation_file") or os.path.join(anim_dir, f"scene{scene['id']}.fbx")
     character_file = scene.get("character_file") or "assets/characters/hero.fbx"
-
     loaded_animation = load_fbx(animation_file)
     loaded_character = loaded_animation or load_fbx(character_file)
     if not loaded_character:
         build_placeholder(total_frames)
-
     bpy.context.scene.frame_start = 1
     bpy.context.scene.frame_end = total_frames
-
     cam, target = setup_camera(scene.get("camera", "medium shot"))
     animate_camera(cam, target, total_frames)
     setup_render(args)
-
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     log(f"rendering scene {scene['id']} for {duration}s ({total_frames} frames)")
     bpy.ops.render.render(animation=True)
