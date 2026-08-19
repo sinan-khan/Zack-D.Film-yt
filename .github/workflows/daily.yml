@@ -8,8 +8,6 @@ on:
   repository_dispatch:
     types: [produce]
 
-# Never cancel an active production just because another trigger starts.
-# A second run will wait instead of killing an expensive Blender render.
 concurrency:
   group: production
   cancel-in-progress: false
@@ -92,9 +90,10 @@ jobs:
     name: Render scene ${{ matrix.scene }}
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 45
     strategy:
       fail-fast: false
+      max-parallel: 3
       matrix:
         scene: ${{ fromJson(needs.prepare.outputs.scene_list) }}
     steps:
@@ -117,7 +116,7 @@ jobs:
           else
             echo "No repository character FBX found; renderer will use its procedural fallback."
           fi
-      - name: Render scene with Blender (containerized)
+      - name: Render scene with Blender (fast CI profile)
         run: |
           STORY_ID="${{ needs.prepare.outputs.story_id }}"
           docker run --rm -v "$PWD:/work" -w /work \
@@ -126,8 +125,8 @@ jobs:
             --story "content/stories/${STORY_ID}.json" \
             --scene ${{ matrix.scene }} \
             --out "output/scenes/scene${{ matrix.scene }}.mp4" \
-            --fps 24 --resolution-x 1080 --resolution-y 1920 \
-            --engine BLENDER_EEVEE --samples 32 --max-seconds 90
+            --fps 15 --resolution-x 540 --resolution-y 960 \
+            --engine BLENDER_EEVEE --samples 8 --max-seconds 90
       - name: Validate rendered scene
         run: |
           test -s "output/scenes/scene${{ matrix.scene }}.mp4"
@@ -171,6 +170,18 @@ jobs:
           cp staging/audio/*.mp3 output/audio/
           find rendered -type f -name '*.mp4' -exec cp {} output/scenes/ \;
           ls -la output/scenes output/audio
+      - name: Normalize scenes to final Shorts format
+        run: |
+          mkdir -p output/scenes/final
+          for f in output/scenes/scene*.mp4; do
+            base=$(basename "$f")
+            ffmpeg -y -hide_banner -loglevel error -i "$f" \
+              -vf "scale=1080:1920:flags=lanczos,fps=24,format=yuv420p" \
+              -c:v libx264 -preset veryfast -crf 18 -movflags +faststart \
+              "output/scenes/final/$base"
+          done
+          rm -f output/scenes/scene*.mp4
+          cp output/scenes/final/*.mp4 output/scenes/
       - name: Composite scenes + narration + music
         run: |
           python scripts/assembly/composite.py \
@@ -186,7 +197,8 @@ jobs:
         run: |
           test -s output/final.mp4
           test -s output/thumbnail.jpg
-          ffprobe -v error -show_entries stream=width,height -of csv=p=0 output/final.mp4
+          test "$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 output/final.mp4)" = "1080"
+          test "$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 output/final.mp4)" = "1920"
           ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 output/final.mp4
       - name: Upload final package
         uses: actions/upload-artifact@v4
