@@ -1,20 +1,16 @@
 channel:
   name: "Zack d. Films"
-  # YouTube category IDs: 22 = People & Blogs, 24 = Entertainment, 28 = Science & Technology
-  category_id: 22
+  category_id: 24
 
 youtube:
-  # private = upload but keep hidden for review, unlisted = link-only, public = live on channel
-  privacy_status: "public"
+  privacy_status: "private"
   made_for_kids: false
 
 video:
   fps: 24
-  resolution: [1920, 1080]
-  max_duration_seconds: 120
-  # extra seconds of silence added after narration so the viewer can breathe
+  resolution: [1080, 1920]
+  max_duration_seconds: 90
   scene_padding_seconds: 1.5
-  # optional background music file inside the repo, e.g. assets/music/ambient.mp3
   music_file: ""
   music_volume: 0.12
 
@@ -23,13 +19,11 @@ tts:
   rate: "+0%"
 
 render:
-  engine: "CYCLES"
-  samples: 64
+  engine: "BLENDER_EEVEE_NEXT"
+  samples: 32
   device: "CPU"
-  # LOW / MEDIUM / HIGH quality for the H.264 output
   ffmpeg_crf: "HIGH"
-  # how many seconds of animation to keep if the source clip is longer than the scene
-  max_animation_seconds: 30
+  max_animation_seconds: 90
 
 credits:
   text2motion: >
