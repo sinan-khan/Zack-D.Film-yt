@@ -102,20 +102,29 @@ jobs:
           mkdir -p content/stories assets/animations output/scenes
           cp staging/story.json "content/stories/${STORY_ID}.json"
           if [ -d staging/animations ]; then cp -r staging/animations/* assets/animations/ 2>/dev/null || true; fi
-      - name: Render fast CI scene
+      - name: Install host FFmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - name: Render frames with Blender container
         run: |
           STORY_ID="${{ needs.prepare.outputs.story_id }}"
-          docker run --rm --entrypoint /bin/bash -v "$PWD:/work" -w /work blendergrid/blender:latest -lc "
-            set -e
-            apt-get update -qq
-            apt-get install -y -qq ffmpeg >/dev/null 2>&1
-            exec blender -b --python-exit-code 1 --python scripts/render/render_scene.py -- \\
-              --story content/stories/${STORY_ID}.json \\
-              --scene ${{ matrix.scene }} \\
-              --out output/scenes/scene${{ matrix.scene }}.mp4 \\
-              --fps 15 --resolution-x 540 --resolution-y 960 \\
-              --engine BLENDER_EEVEE --samples 8 --max-seconds 90
-          "
+          docker run --rm -v "$PWD:/work" -w /work blendergrid/blender:latest \
+            -b --python-exit-code 1 --python scripts/render/render_scene.py -- \
+            --story "content/stories/${STORY_ID}.json" \
+            --scene ${{ matrix.scene }} \
+            --out "output/scenes/scene${{ matrix.scene }}.mp4" \
+            --fps 15 --resolution-x 540 --resolution-y 960 \
+            --engine BLENDER_EEVEE --samples 8 --max-seconds 90 --no-encode
+      - name: Encode scene on GitHub runner
+        run: |
+          FRAME_DIR="output/scenes/.frames_scene${{ matrix.scene }}"
+          OUT="output/scenes/scene${{ matrix.scene }}.mp4"
+          test -d "$FRAME_DIR"
+          test "$(find "$FRAME_DIR" -type f -name 'frame*.jpg' | wc -l)" -gt 0
+          ffmpeg -y -hide_banner -loglevel error \
+            -framerate 15 -i "$FRAME_DIR/frame%04d.jpg" \
+            -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p \
+            -movflags +faststart "$OUT"
+          rm -rf "$FRAME_DIR"
       - name: Validate scene
         run: |
           test -s "output/scenes/scene${{ matrix.scene }}.mp4"
