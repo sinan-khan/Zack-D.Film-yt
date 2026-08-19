@@ -3,6 +3,8 @@
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
 
 try:
@@ -154,17 +156,10 @@ def setup_camera(camera_type):
     return cam, target
 
 
-def setup_render(args):
+def setup_render(args, frame_dir):
     sc = bpy.context.scene
     requested = args.engine.upper()
-    candidates = []
-    if requested in ("BLENDER_EEVEE_NEXT", "EEVEE_NEXT", "EEVEE"):
-        # Blender 5.0 calls this BLENDER_EEVEE; newer Blender builds may use
-        # BLENDER_EEVEE_NEXT. Try the installed version rather than assuming.
-        candidates = ["BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"]
-    else:
-        candidates = [requested]
-
+    candidates = ["BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"] if requested in ("BLENDER_EEVEE_NEXT", "EEVEE_NEXT", "EEVEE") else [requested]
     engine = None
     last_error = None
     for candidate in candidates:
@@ -176,7 +171,6 @@ def setup_render(args):
             last_error = exc
     if engine is None:
         raise RuntimeError(f"No compatible Blender render engine for {requested}: {last_error}")
-
     if engine == "CYCLES":
         sc.cycles.device = "CPU"
         sc.cycles.samples = args.samples
@@ -184,13 +178,11 @@ def setup_render(args):
     sc.render.resolution_y = args.resolution_y
     sc.render.resolution_percentage = 100
     sc.render.fps = args.fps
-    sc.render.image_settings.file_format = "FFMPEG"
-    sc.render.ffmpeg.format = "MPEG4"
-    sc.render.ffmpeg.codec = "H264"
-    sc.render.ffmpeg.constant_rate_factor = "HIGH"
-    sc.render.ffmpeg.audio_codec = "NONE"
-    sc.render.filepath = args.out
-    log(f"engine={engine} {args.resolution_x}x{args.resolution_y}@{args.fps}")
+    # Blender 5.0 removed FFMPEG from image_settings.file_format. Render a
+    # numbered PNG sequence first, then encode it with the system ffmpeg.
+    sc.render.image_settings.file_format = "PNG"
+    sc.render.filepath = os.path.join(frame_dir, "frame")
+    log(f"engine={engine} {args.resolution_x}x{args.resolution_y}@{args.fps}; frame_dir={frame_dir}")
 
 
 def animate_camera(cam, target, total_frames):
@@ -202,6 +194,25 @@ def animate_camera(cam, target, total_frames):
     target.location.z += 0.15
     cam.keyframe_insert(data_path="location", frame=total_frames)
     target.keyframe_insert(data_path="location", frame=total_frames)
+
+
+def encode_video(frame_dir, out, fps):
+    frames = sorted(name for name in os.listdir(frame_dir) if name.lower().endswith(".png"))
+    if not frames:
+        raise RuntimeError(f"Blender produced no PNG frames in {frame_dir}")
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError("ffmpeg is required to encode the rendered PNG sequence")
+    cmd = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-framerate", str(fps),
+        "-i", os.path.join(frame_dir, "frame%04d.png"),
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart", out,
+    ]
+    log(f"encoding {len(frames)} frames to {out}")
+    subprocess.run(cmd, check=True)
+    if not os.path.exists(out) or os.path.getsize(out) < 100000:
+        raise RuntimeError(f"ffmpeg output missing or suspiciously small: {out}")
 
 
 def main():
@@ -241,12 +252,18 @@ def main():
     bpy.context.scene.frame_end = total_frames
     cam, target = setup_camera(scene.get("camera", "medium shot"))
     animate_camera(cam, target, total_frames)
-    setup_render(args)
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-    log(f"rendering scene {scene['id']} for {duration}s ({total_frames} frames)")
-    bpy.ops.render.render(animation=True)
-    if not os.path.exists(args.out) or os.path.getsize(args.out) < 100000:
-        sys.exit(f"[render] render output missing or suspiciously small: {args.out}")
+    frame_dir = os.path.join(os.path.dirname(args.out) or ".", f".frames_scene{scene['id']}")
+    if os.path.isdir(frame_dir):
+        shutil.rmtree(frame_dir)
+    os.makedirs(frame_dir, exist_ok=True)
+    try:
+        setup_render(args, frame_dir)
+        log(f"rendering scene {scene['id']} for {duration}s ({total_frames} frames)")
+        bpy.ops.render.render(animation=True)
+        encode_video(frame_dir, args.out, args.fps)
+    finally:
+        shutil.rmtree(frame_dir, ignore_errors=True)
     log(f"done: {args.out} ({os.path.getsize(args.out)} bytes)")
 
 
