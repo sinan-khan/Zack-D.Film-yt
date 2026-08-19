@@ -1,24 +1,10 @@
 #!/usr/bin/env python3
-"""Render one scene of a production plan with Blender, fully headless.
+"""Headless Blender renderer for one story scene.
 
-Run inside the `blendergrid/blender` container (or any Blender install):
-
-  blender -b --python scripts/render/render_scene.py -- \
-      --story content/stories/story-001.json \
-      --scene 0 \
-      --out output/scenes/scene0.mp4
-
-The script only needs bpy + stdlib, so it runs in the plain Blender
-python environment with no extra packages. It is designed to render a
-single scene in isolation so GitHub Actions can run scenes in parallel.
-
-Path resolution for animation assets:
-  1. scene["animation_file"]   (absolute or repo-relative path)
-  2. scene["character_file"]   (character-only FBX, idle pose)
-  3. assets/characters/hero.fbx as the default character
-  4. assets/animations/{story_id}/scene{id}.fbx as the default clip
+The scene duration is authoritative: narration/planning determines the
+length, while an animation clip is allowed to finish early and hold its last
+pose instead of truncating the video.
 """
-
 import argparse
 import json
 import os
@@ -27,53 +13,13 @@ import sys
 try:
     import bpy
     from mathutils import Vector
-except ImportError:  # running outside Blender
+except ImportError:
     bpy = None
     Vector = None
-
-if bpy:
-    # Set render engine to Cycles CPU for headless rendering
-    bpy.context.scene.render.engine = 'CYCLES'
-    bpy.context.scene.cycles.device = 'CPU'
-    bpy.context.scene.cycles.samples = 64  # Adjust sample count for speed vs quality
 
 
 def log(msg):
     print(f"[render] {msg}", flush=True)
-
-
-def setup_render(scene_ctx, args, cfg):
-    sc = bpy.context.scene
-    
-    # Ensure cycles addon is loaded
-    bpy.ops.preferences.addon_enable(module="cycles")
-    
-    # Force Cycles or ensure upper check handles default
-    engine_name = getattr(args, "engine", "CYCLES").upper()
-    if engine_name not in ["CYCLES", "BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"]:
-        engine_name = "CYCLES"
-
-    sc.render.engine = engine_name
-    
-    if sc.render.engine == "CYCLES":
-        sc.cycles.samples = cfg.get("samples", 64)
-        sc.cycles.device = cfg.get("device", "CPU")
-        
-    sc.render.resolution_x = args.resolution_x
-    sc.render.resolution_y = args.resolution_y
-    sc.render.fps = args.fps
-    sc.render.fps_base = 1.0
-    sc.render.image_settings.media_type = "VIDEO"
-    sc.render.image_settings.file_format = "FFMPEG"
-    sc.render.ffmpeg.format = "MPEG4"
-    sc.render.ffmpeg.codec = "H264"
-    sc.render.ffmpeg.constant_rate_factor = cfg.get("ffmpeg_crf", "HIGH")
-    sc.render.ffmpeg.audio_codec = "NONE"
-    sc.render.filepath = args.out
-    
-    samples_info = sc.cycles.samples if sc.render.engine == "CYCLES" else "N/A"
-    log(f"engine={sc.render.engine} samples={samples_info} "
-        f"{args.resolution_x}x{args.resolution_y}@{args.fps}fps")
 
 
 def clear_scene():
@@ -85,184 +31,171 @@ def build_world(mood):
     world = bpy.data.worlds.new("World")
     bpy.context.scene.world = world
     world.use_nodes = True
-    nt = world.node_tree
-    nt.nodes.clear()
-    out = nt.nodes.new("ShaderNodeOutputWorld")
-    bg = nt.nodes.new("ShaderNodeBackground")
-    tex = nt.nodes.new("ShaderNodeTexSky")
-    tex.sky_type = "SINGLE_SCATTERING"  # Blender 5.0 renamed "NISHITA" to this
-    tex.sun_elevation = 0.12 if "dusk" in mood or "night" in mood else 0.45
-    tex.sun_rotation = -0.6
-    if "storm" in mood or "rain" in mood:
-        tex.sun_elevation = -0.15
-    nt.links.new(tex.outputs["Color"], bg.inputs["Color"])
-    nt.links.new(bg.outputs["Background"], out.inputs["Surface"])
+    nodes = world.node_tree.nodes
+    links = world.node_tree.links
+    nodes.clear()
+    out = nodes.new("ShaderNodeOutputWorld")
+    bg = nodes.new("ShaderNodeBackground")
+    sky = nodes.new("ShaderNodeTexSky")
+    try:
+        sky.sky_type = "SINGLE_SCATTERING"
+    except Exception:
+        pass
+    sky.sun_elevation = -0.15 if any(x in mood.lower() for x in ("night", "storm", "rain")) else 0.35
+    bg.inputs["Strength"].default_value = 0.35
+    links.new(sky.outputs["Color"], bg.inputs["Color"])
+    links.new(bg.outputs["Background"], out.inputs["Surface"])
 
 
 def build_ground():
     bpy.ops.mesh.primitive_plane_add(size=60, location=(0, 0, 0))
     plane = bpy.context.object
-    plane.name = "Ground"
     mat = bpy.data.materials.new("GroundMat")
     mat.use_nodes = True
-    bsdf = mat.node_tree.nodes["Principled BSDF"]
-    bsdf.inputs["Base Color"].default_value = (0.22, 0.20, 0.18, 1.0)
+    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    bsdf.inputs["Base Color"].default_value = (0.18, 0.16, 0.15, 1)
     bsdf.inputs["Roughness"].default_value = 0.9
     plane.data.materials.append(mat)
-    return plane
 
 
 def build_lights(mood):
-    # Key sun light
-    sun = bpy.data.objects.new("SunLight", bpy.data.lights.new("SunLight", "SUN"))
+    night = any(x in mood.lower() for x in ("night", "storm", "rain"))
+    sun_data = bpy.data.lights.new("Sun", "SUN")
+    sun = bpy.data.objects.new("Sun", sun_data)
     bpy.context.collection.objects.link(sun)
-    sun.rotation_euler = (0.7, 0.0, -0.5)
-    if "night" in mood or "storm" in mood:
-        sun.data.energy = 1.2
-        sun.data.angle = 2.0
-    elif "dusk" in mood:
-        sun.data.energy = 2.5
-        sun.data.angle = 1.2
-    else:
-        sun.data.energy = 3.0
-        sun.data.angle = 0.6
+    sun.rotation_euler = (0.7, -0.3, -0.6)
+    sun_data.energy = 1.0 if night else 2.5
+    sun_data.angle = 1.0
 
-    # Soft warm fill light
-    fill = bpy.data.objects.new("FillLight", bpy.data.lights.new("FillLight", "AREA"))
+    fill_data = bpy.data.lights.new("Fill", "AREA")
+    fill = bpy.data.objects.new("Fill", fill_data)
     bpy.context.collection.objects.link(fill)
-    fill.location = (-6, 6, 5)
-    fill.rotation_euler = (0.9, 0.0, 0.9)
-    fill.data.energy = 150.0
-    fill.data.size = 8.0
+    fill.location = (-5, 4, 5)
+    fill_data.energy = 120 if night else 220
+    fill_data.size = 6
 
 
-def load_fbx(filepath):
-    if not os.path.exists(filepath):
-        return None
-    bpy.ops.import_scene.fbx(filepath=filepath, axis_forward="-Z", axis_up="Y")
-    log(f"loaded {filepath}")
-    return filepath
+def load_fbx(path):
+    if not path or not os.path.exists(path):
+        return False
+    try:
+        bpy.ops.import_scene.fbx(filepath=path, axis_forward="-Z", axis_up="Y")
+        log(f"loaded FBX: {path}")
+        return True
+    except Exception as exc:
+        log(f"WARNING: failed to import {path}: {exc}")
+        return False
 
 
-def scene_bounds():
-    corners = []
-    for o in bpy.data.objects:
-        if o.type == "MESH":
-            corners += [o.matrix_world @ Vector(c) for c in o.bound_box]
-    if not corners:
-        return None, None
-    lo = Vector((min(c.x for c in corners), min(c.y for c in corners), min(c.z for c in corners)))
-    hi = Vector((max(c.x for c in corners), max(c.y for c in corners), max(c.z for c in corners)))
-    center = (lo + hi) / 2.0
-    radius = max((c - center).length for c in corners)
-    return center, max(radius, 1.0)
-
-
-def find_armature():
-    for o in bpy.data.objects:
-        if o.type == "ARMATURE":
-            return o
-    return None
-
-
-def build_placeholder_character(total_frames):
-    """A tiny low-poly capsule figure so the pipeline renders something
-    even before any FBX character has been added. Includes a gentle sway."""
+def build_placeholder(total_frames):
     root = bpy.data.objects.new("CharacterRoot", None)
     bpy.context.collection.objects.link(root)
-    root.location = (0, 0, 0)
 
-    def part(kind, color, **kw):
-        getattr(bpy.ops.mesh, f"primitive_{kind}_add")(**kw)
+    def part(kind, location, scale, material_color):
+        op = getattr(bpy.ops.mesh, f"primitive_{kind}_add")
+        op(location=location)
         obj = bpy.context.object
+        obj.scale = scale
         obj.parent = root
         mat = bpy.data.materials.new(f"Mat_{obj.name}")
-        mat.use_nodes = True
-        mat.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = color
+        mat.diffuse_color = material_color
         obj.data.materials.append(mat)
         return obj
 
-    part("cylinder", (0.75, 0.45, 0.28, 1.0), radius=0.32, depth=1.1, location=(0, 0, 1.25))  # torso (no native capsule primitive)
-    part("uv_sphere", (0.95, 0.75, 0.55, 1.0), radius=0.30, location=(0, 0, 2.2))
-    part("cylinder", (0.3, 0.3, 0.35, 1.0), radius=0.11, depth=1.0, location=(-0.14, 0, 0.5))
-    part("cylinder", (0.3, 0.3, 0.35, 1.0), radius=0.11, depth=1.0, location=(0.14, 0, 0.5))
-    part("cylinder", (0.5, 0.32, 0.22, 1.0), radius=0.09, depth=0.8, location=(-0.45, 0, 1.5), rotation=(0, 0, 0.12))
-    part("cylinder", (0.5, 0.32, 0.22, 1.0), radius=0.09, depth=0.8, location=(0.45, 0, 1.5), rotation=(0, 0, -0.12))
-    part("uv_sphere", (0.05, 0.05, 0.05, 1.0), radius=0.05, location=(-0.11, 0.26, 2.28))
-    part("uv_sphere", (0.05, 0.05, 0.05, 1.0), radius=0.05, location=(0.11, 0.26, 2.28))
+    part("cylinder", (0, 0, 1.2), (0.32, 0.32, 0.65), (0.65, 0.38, 0.22, 1))
+    part("uv_sphere", (0, 0, 2.15), (0.30, 0.30, 0.30), (0.9, 0.7, 0.5, 1))
+    part("cylinder", (-0.14, 0, 0.45), (0.10, 0.10, 0.5), (0.15, 0.15, 0.18, 1))
+    part("cylinder", (0.14, 0, 0.45), (0.10, 0.10, 0.5), (0.15, 0.15, 0.18, 1))
+    part("cylinder", (-0.42, 0, 1.45), (0.08, 0.08, 0.4), (0.45, 0.28, 0.18, 1))
+    part("cylinder", (0.42, 0, 1.45), (0.08, 0.08, 0.4), (0.45, 0.28, 0.18, 1))
 
     if total_frames > 2:
-        root.rotation_euler = (0, 0, -0.12)
-        root.keyframe_insert(data_path="rotation_euler", frame=1)
-        root.rotation_euler = (0, 0, 0.12)
-        root.keyframe_insert(data_path="rotation_euler", frame=max(2, total_frames // 2))
-        root.rotation_euler = (0, 0, -0.12)
-        root.keyframe_insert(data_path="rotation_euler", frame=total_frames)
-
-    log("WARNING: no FBX assets found - using procedural placeholder character")
-    return root
+        for frame, angle in ((1, -0.08), (total_frames // 2, 0.08), (total_frames, -0.08)):
+            root.rotation_euler.z = angle
+            root.keyframe_insert(data_path="rotation_euler", frame=frame)
+    log("WARNING: no character/animation FBX; using procedural fallback")
 
 
-def animation_frame_range():
-    hi = 0
-    for o in bpy.data.objects:
-        if o.animation_data and o.animation_data.action:
-            a, b = o.animation_data.action.frame_range
-            hi = max(hi, int(b))
-    return hi
+def bounds():
+    points = []
+    for obj in bpy.data.objects:
+        if obj.type == "MESH":
+            points.extend(obj.matrix_world @ Vector(c) for c in obj.bound_box)
+    if not points:
+        return Vector((0, 0, 1)), 2.0
+    lo = Vector((min(p.x for p in points), min(p.y for p in points), min(p.z for p in points)))
+    hi = Vector((max(p.x for p in points), max(p.y for p in points), max(p.z for p in points)))
+    center = (lo + hi) / 2
+    radius = max((p - center).length for p in points)
+    return center, max(radius, 1.0)
 
 
-def setup_camera():
-    center, radius = scene_bounds()
-    if center is None:
-        log("WARNING: no geometry found, camera uses a fixed angle")
-        return
-
-    cam_data = bpy.data.cameras.new("Cam")
-    cam_data.lens = 50.0
-    cam = bpy.data.objects.new("Cam", cam_data)
+def setup_camera(camera_type):
+    center, radius = bounds()
+    cam_data = bpy.data.cameras.new("Camera")
+    cam = bpy.data.objects.new("Camera", cam_data)
     bpy.context.collection.objects.link(cam)
     bpy.context.scene.camera = cam
 
     target = bpy.data.objects.new("CameraTarget", None)
     bpy.context.collection.objects.link(target)
-    target.location = (center.x, center.y, center.z + radius * 0.4)
+    target.location = center + Vector((0, 0, radius * 0.15))
 
-    direction = Vector((0.9, -0.9, 0.55)).normalized()
-    cam.location = target.location + direction * (radius * 3.4)
-    cam.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
+    kind = (camera_type or "medium shot").lower()
+    if "close" in kind:
+        distance, height, lens = radius * 2.0, radius * 0.45, 65
+    elif "low" in kind:
+        distance, height, lens = radius * 3.0, -radius * 0.15, 50
+    elif "over-the-shoulder" in kind:
+        distance, height, lens = radius * 2.8, radius * 0.35, 55
+    elif "wide" in kind:
+        distance, height, lens = radius * 5.0, radius * 0.8, 42
+    else:
+        distance, height, lens = radius * 3.2, radius * 0.55, 52
 
-    tc = cam.constraints.new("TRACK_TO")
-    tc.target = target
-    tc.track_axis = "TRACK_NEGATIVE_Z"
-    tc.up_axis = "UP_Y"
-    log(f"camera placed at radius {radius:.2f} tracking scene centre")
+    cam_data.lens = lens
+    cam.location = target.location + Vector((distance * 0.85, -distance, height))
+    cam.rotation_euler = (target.location - cam.location).to_track_quat("-Z", "Y").to_euler()
+    constraint = cam.constraints.new("TRACK_TO")
+    constraint.target = target
+    constraint.track_axis = "TRACK_NEGATIVE_Z"
+    constraint.up_axis = "UP_Y"
+
+    log(f"camera={camera_type!r} lens={lens} distance={distance:.1f}")
+    return cam, target
 
 
-def animate_camera(total_frames):
-    """Slow push-in + gentle rise so scenes stay alive even if the
-    animation clip is shorter than the narration."""
-    if total_frames <= 2:
+def setup_render(args):
+    sc = bpy.context.scene
+    engine = args.engine.upper()
+    if engine not in ("CYCLES", "BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"):
+        engine = "BLENDER_EEVEE_NEXT"
+    sc.render.engine = engine
+    if engine == "CYCLES":
+        sc.cycles.device = "CPU"
+        sc.cycles.samples = args.samples
+    sc.render.resolution_x = args.resolution_x
+    sc.render.resolution_y = args.resolution_y
+    sc.render.resolution_percentage = 100
+    sc.render.fps = args.fps
+    sc.render.image_settings.file_format = "FFMPEG"
+    sc.render.ffmpeg.format = "MPEG4"
+    sc.render.ffmpeg.codec = "H264"
+    sc.render.ffmpeg.constant_rate_factor = "HIGH"
+    sc.render.ffmpeg.audio_codec = "NONE"
+    sc.render.filepath = args.out
+    log(f"engine={engine} {args.resolution_x}x{args.resolution_y}@{args.fps}")
+
+
+def animate_camera(cam, target, total_frames):
+    if total_frames < 2:
         return
-    cam = bpy.context.scene.camera
-    if cam is None:
-        return
-    target = next((o for o in bpy.data.objects if o.name == "CameraTarget"), None)
-
     cam.keyframe_insert(data_path="location", frame=1)
-    if target is not None:
-        target.keyframe_insert(data_path="location", frame=1)
-
-    direction = (cam.location - target.location).normalized() if target is not None else Vector((0.9, -0.9, 0.55)).normalized()
-    cam.location += direction * 0.6
-    cam.location.z += 0.2
-    if target is not None:
-        target.location.z += 0.4
-
+    target.keyframe_insert(data_path="location", frame=1)
+    cam.location = cam.location * 0.94
+    target.location.z += 0.15
     cam.keyframe_insert(data_path="location", frame=total_frames)
-    if target is not None:
-        target.keyframe_insert(data_path="location", frame=total_frames)
-    log(f"camera drift over {total_frames} frames")
+    target.keyframe_insert(data_path="location", frame=total_frames)
 
 
 def main():
@@ -271,65 +204,54 @@ def main():
     ap.add_argument("--scene", required=True, type=int)
     ap.add_argument("--out", required=True)
     ap.add_argument("--fps", type=int, default=24)
-    ap.add_argument("--resolution-x", type=int, default=1920)
-    ap.add_argument("--resolution-y", type=int, default=1080)
-    ap.add_argument("--engine", default="BLENDER_EEVEE")  # EEVEE renders in seconds vs Cycles' path-traced minutes/frame on CPU-only runners
-    ap.add_argument("--samples", type=int, default=64)
-    ap.add_argument("--max-seconds", type=int, default=30)
+    ap.add_argument("--resolution-x", type=int, default=1080)
+    ap.add_argument("--resolution-y", type=int, default=1920)
+    ap.add_argument("--engine", default="BLENDER_EEVEE_NEXT")
+    ap.add_argument("--samples", type=int, default=32)
+    ap.add_argument("--max-seconds", type=int, default=90)
 
-    # Blender puts its own CLI (blender -b --python render_scene.py -- ...)
-    # into sys.argv untouched, so the script's own args have to be split
-    # out manually at the "--" separator.
     argv = sys.argv
     argv = argv[argv.index("--") + 1:] if "--" in argv else argv[1:]
     args = ap.parse_args(argv)
-
     if bpy is None:
-        sys.exit("[render] bpy is not available - run this inside Blender (see docstring)")
+        sys.exit("[render] bpy is not available; run inside Blender")
 
     with open(args.story) as fh:
         story = json.load(fh)
     scene = story["scenes"][args.scene]
-
-    cfg = {"samples": args.samples, "engine": args.engine,
-           "ffmpeg_crf": "HIGH", "device": "CPU"}
+    duration = max(1, min(int(scene.get("duration_seconds", 20)), args.max_seconds))
+    total_frames = max(2, int(duration * args.fps))
 
     clear_scene()
-    build_world(scene.get("mood", "neutral"))
+    mood = scene.get("mood", "neutral")
+    build_world(mood)
     build_ground()
-    build_lights(scene.get("mood", "neutral"))
+    build_lights(mood)
 
-    character_file = scene.get("character_file") or "assets/characters/hero.fbx"
     anim_dir = os.path.join("assets", "animations", story.get("id", "story"))
     animation_file = scene.get("animation_file") or os.path.join(anim_dir, f"scene{scene['id']}.fbx")
+    character_file = scene.get("character_file") or "assets/characters/hero.fbx"
 
-    duration = int(scene.get("duration_seconds", 20))
-    duration = min(duration, args.max_seconds)
-    frame_end = int(duration * args.fps)
+    loaded_animation = load_fbx(animation_file)
+    loaded_character = loaded_animation or load_fbx(character_file)
+    if not loaded_character:
+        build_placeholder(total_frames)
 
-    has_animation_clip = load_fbx(animation_file) is not None
-    has_character = has_animation_clip or load_fbx(character_file) is not None
-    if not has_character:
-        build_placeholder_character(frame_end)
-
-    if has_animation_clip:
-        clip_end = animation_frame_range()
-        if clip_end > 1:
-            frame_end = min(frame_end, clip_end)
-            log(f"clip length = {clip_end} frames, scene capped to {frame_end}")
-    else:
-        log(f"no standalone animation clip - using full scene length of {frame_end} frames")
-
-    setup_camera()
-    setup_render(bpy.context.scene, args, cfg)
+    # Never shorten a planned/narrated scene because an imported animation is
+    # shorter. Blender holds the final imported pose for the remaining frames.
     bpy.context.scene.frame_start = 1
-    bpy.context.scene.frame_end = max(frame_end, 2)
-    animate_camera(bpy.context.scene.frame_end)
+    bpy.context.scene.frame_end = total_frames
+
+    cam, target = setup_camera(scene.get("camera", "medium shot"))
+    animate_camera(cam, target, total_frames)
+    setup_render(args)
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-    log(f"rendering frames 1..{frame_end} -> {args.out}")
+    log(f"rendering scene {scene['id']} for {duration}s ({total_frames} frames)")
     bpy.ops.render.render(animation=True)
-    log("done")
+    if not os.path.exists(args.out) or os.path.getsize(args.out) < 100000:
+        sys.exit(f"[render] render output missing or suspiciously small: {args.out}")
+    log(f"done: {args.out} ({os.path.getsize(args.out)} bytes)")
 
 
 if __name__ == "__main__":
