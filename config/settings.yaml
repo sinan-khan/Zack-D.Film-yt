@@ -19,7 +19,8 @@ tts:
   rate: "+0%"
 
 render:
-  engine: "BLENDER_EEVEE_NEXT"
+  # Blender 5.0 (the current CI container) exposes EEVEE as BLENDER_EEVEE.
+  engine: "BLENDER_EEVEE"
   samples: 32
   device: "CPU"
   ffmpeg_crf: "HIGH"
