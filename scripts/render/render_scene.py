@@ -167,9 +167,23 @@ def setup_camera(camera_type):
 
 def setup_render(args):
     sc = bpy.context.scene
-    engine = args.engine.upper()
-    if engine not in ("CYCLES", "BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"):
-        engine = "BLENDER_EEVEE_NEXT"
+    requested = args.engine.upper()
+    # Blender 5.0 exposes EEVEE as BLENDER_EEVEE. Newer builds may expose
+    # BLENDER_EEVEE_NEXT. Resolve against the actual enum values so the
+    # pipeline remains compatible with the container image in use.
+    available = {item.identifier for item in sc.bl_rna.properties["render"].enum_items if False}
+    # The render.engine enum is exposed on the property itself.
+    engine_items = {item.identifier for item in sc.bl_rna.properties["render"].enum_items} if hasattr(sc.bl_rna.properties["render"], "enum_items") else set()
+    if not engine_items:
+        engine_items = {"CYCLES", "BLENDER_EEVEE", "BLENDER_WORKBENCH"}
+    aliases = {
+        "BLENDER_EEVEE_NEXT": "BLENDER_EEVEE" if "BLENDER_EEVEE" in engine_items else "BLENDER_EEVEE_NEXT",
+        "EEVEE_NEXT": "BLENDER_EEVEE" if "BLENDER_EEVEE" in engine_items else "BLENDER_EEVEE_NEXT",
+        "EEVEE": "BLENDER_EEVEE" if "BLENDER_EEVEE" in engine_items else "BLENDER_EEVEE_NEXT",
+    }
+    engine = aliases.get(requested, requested)
+    if engine not in engine_items:
+        engine = "BLENDER_EEVEE" if "BLENDER_EEVEE" in engine_items else next(iter(engine_items))
     sc.render.engine = engine
     if engine == "CYCLES":
         sc.cycles.device = "CPU"
@@ -206,7 +220,7 @@ def main():
     ap.add_argument("--fps", type=int, default=24)
     ap.add_argument("--resolution-x", type=int, default=1080)
     ap.add_argument("--resolution-y", type=int, default=1920)
-    ap.add_argument("--engine", default="BLENDER_EEVEE_NEXT")
+    ap.add_argument("--engine", default="BLENDER_EEVEE")
     ap.add_argument("--samples", type=int, default=32)
     ap.add_argument("--max-seconds", type=int, default=90)
 
@@ -237,8 +251,6 @@ def main():
     if not loaded_character:
         build_placeholder(total_frames)
 
-    # Never shorten a planned/narrated scene because an imported animation is
-    # shorter. Blender holds the final imported pose for the remaining frames.
     bpy.context.scene.frame_start = 1
     bpy.context.scene.frame_end = total_frames
 
