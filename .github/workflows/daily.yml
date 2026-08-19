@@ -105,15 +105,17 @@ jobs:
       - name: Render fast CI scene
         run: |
           STORY_ID="${{ needs.prepare.outputs.story_id }}"
-          docker run --rm -v "$PWD:/work" -w /work blendergrid/blender:latest bash -lc '
-            apt-get update -qq && apt-get install -y -qq ffmpeg >/dev/null 2>&1 &&
-            blender -b --python-exit-code 1 --python scripts/render/render_scene.py -- \
-              --story "content/stories/'"${STORY_ID}"'.json" \
-              --scene ${{ matrix.scene }} \
-              --out "output/scenes/scene${{ matrix.scene }}.mp4" \
-              --fps 15 --resolution-x 540 --resolution-y 960 \
+          docker run --rm --entrypoint /bin/bash -v "$PWD:/work" -w /work blendergrid/blender:latest -lc "
+            set -e
+            apt-get update -qq
+            apt-get install -y -qq ffmpeg >/dev/null 2>&1
+            exec blender -b --python-exit-code 1 --python scripts/render/render_scene.py -- \\
+              --story content/stories/${STORY_ID}.json \\
+              --scene ${{ matrix.scene }} \\
+              --out output/scenes/scene${{ matrix.scene }}.mp4 \\
+              --fps 15 --resolution-x 540 --resolution-y 960 \\
               --engine BLENDER_EEVEE --samples 8 --max-seconds 90
-          '
+          "
       - name: Validate scene
         run: |
           test -s "output/scenes/scene${{ matrix.scene }}.mp4"
@@ -156,10 +158,7 @@ jobs:
           mkdir -p output/scenes/final
           for f in output/scenes/scene*.mp4; do
             base=$(basename "$f")
-            ffmpeg -y -hide_banner -loglevel error -i "$f" \
-              -vf "scale=1080:1920:flags=lanczos,fps=24,format=yuv420p" \
-              -c:v libx264 -preset veryfast -crf 18 -movflags +faststart \
-              "output/scenes/final/$base"
+            ffmpeg -y -hide_banner -loglevel error -i "$f" -vf "scale=1080:1920:flags=lanczos,fps=24,format=yuv420p" -c:v libx264 -preset veryfast -crf 18 -movflags +faststart "output/scenes/final/$base"
           done
           rm -f output/scenes/scene*.mp4
           cp output/scenes/final/*.mp4 output/scenes/
