@@ -26,7 +26,7 @@ env:
 
 jobs:
   prepare:
-    name: Write story, narrate, fetch animations
+    name: Write story, narrate, plan visuals, fetch animations
     runs-on: ubuntu-latest
     outputs:
       story_id: ${{ steps.plan.outputs.story_id }}
@@ -51,20 +51,12 @@ jobs:
           echo "STORY=${STORY}" >> "$GITHUB_ENV"
       - name: Generate story
         run: python scripts/content/generate_story.py --prompt "$STORY" --out staging/story.json
+      - name: Build deterministic visual plan
+        run: python scripts/visual/build_visual_plan.py --story staging/story.json --out staging/story.json
       - name: Generate narration
         run: python scripts/assembly/generate_tts.py --story staging/story.json --out staging/audio
-      - name: Fetch Text2Motion animations
-        if: env.TEXT2MOTION_API_KEY != ''
-        run: |
-          python - <<'EOF'
-          import json, os, subprocess
-          story=json.load(open('staging/story.json'))
-          for s in story['scenes']:
-              if s.get('animation_source') == 'text2motion':
-                  out=f"staging/animations/{story['id']}/scene{s['id']}.fbx"
-                  os.makedirs(os.path.dirname(out), exist_ok=True)
-                  subprocess.run(['python','scripts/animation/text2motion.py','--prompt',s['animation_prompt'],'--out',out],check=True)
-          EOF
+      - name: Fetch animations for every scene
+        run: python scripts/animation/fetch_animations.py --story staging/story.json --out staging/animations
       - name: Report scenes
         id: scenes
         run: |
