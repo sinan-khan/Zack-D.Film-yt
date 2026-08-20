@@ -1,5 +1,4 @@
 name: Daily Short Production
-
 on:
   schedule:
     - cron: "15 7 * * *"
@@ -7,14 +6,8 @@ on:
   workflow_dispatch: {}
   repository_dispatch:
     types: [produce]
-
-concurrency:
-  group: production
-  cancel-in-progress: false
-
-permissions:
-  contents: read
-
+concurrency: {group: production, cancel-in-progress: false}
+permissions: {contents: read}
 env:
   STORY_LLM_API_KEY: ${{ secrets.STORY_LLM_API_KEY }}
   STORY_LLM_BASE_URL: ${{ secrets.STORY_LLM_BASE_URL }}
@@ -23,10 +16,8 @@ env:
   MIXAMO_TOKEN: ${{ secrets.MIXAMO_TOKEN }}
   YOUTUBE_CLIENT_SECRET_JSON: ${{ secrets.YOUTUBE_CLIENT_SECRET_JSON }}
   YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
-
 jobs:
   prepare:
-    name: Write story, narrate, plan visuals, fetch animations
     runs-on: ubuntu-latest
     outputs:
       story_id: ${{ steps.plan.outputs.story_id }}
@@ -34,173 +25,68 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg && pip install -r requirements.txt
-      - name: Pick rotating story prompt
-        id: plan
+        with: {python-version: '3.11'}
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg && pip install -r requirements.txt
+      - id: plan
         run: |
-          mapfile -t PROMPTS < <(find content/prompts -maxdepth 1 -type f -name '*.txt' | sort)
-          COUNT=${#PROMPTS[@]}
-          test "$COUNT" -gt 0 || exit 1
-          INDEX=$(( $(date -u +%s) / 43200 % COUNT ))
-          STORY="${PROMPTS[$INDEX]}"
-          STORY_ID="$(basename "$STORY" .txt)-$(date -u +%Y%m%d-%H%M)"
-          echo "story_id=${STORY_ID}" >> "$GITHUB_OUTPUT"
-          echo "STORY=${STORY}" >> "$GITHUB_ENV"
-      - name: Generate story
-        run: python scripts/content/generate_story.py --prompt "$STORY" --out staging/story.json
-      - name: Build deterministic visual plan
-        run: python scripts/visual/build_visual_plan.py --story staging/story.json --out staging/story.json
-      - name: Generate narration
-        run: python scripts/assembly/generate_tts.py --story staging/story.json --out staging/audio
-      - name: Fetch animations for every scene
-        run: python scripts/animation/fetch_animations.py --story staging/story.json --out staging/animations
-      - name: Report scenes
-        id: scenes
-        run: |
-          python - <<'EOF'
-          import json,os
-          story=json.load(open('staging/story.json'))
-          with open(os.environ['GITHUB_OUTPUT'],'a') as f:
-              f.write('scene_list='+json.dumps([str(s['id']) for s in story['scenes']])+'\n')
-          EOF
+          mapfile -t PROMPTS < <(find content/prompts -maxdepth 1 -type f -name '*.txt' | sort); COUNT=${#PROMPTS[@]}; test "$COUNT" -gt 0
+          INDEX=$(( $(date -u +%s) / 43200 % COUNT )); STORY="${PROMPTS[$INDEX]}"; STORY_ID="$(basename "$STORY" .txt)-$(date -u +%Y%m%d-%H%M)"
+          echo "story_id=$STORY_ID" >> "$GITHUB_OUTPUT"; echo "STORY=$STORY" >> "$GITHUB_ENV"
+      - run: python scripts/content/generate_story.py --prompt "$STORY" --out staging/story.json
+      - run: python scripts/visual/build_visual_plan.py --story staging/story.json --out staging/story.json
+      - run: python scripts/assembly/generate_tts.py --story staging/story.json --out staging/audio
+      - run: python scripts/animation/fetch_animations.py --story staging/story.json --out staging/animations
+      - id: scenes
+        run: python -c "import json,os; s=json.load(open('staging/story.json')); open(os.environ['GITHUB_OUTPUT'],'a').write('scene_list='+json.dumps([str(x['id']) for x in s['scenes']])+'\\n')"
       - uses: actions/upload-artifact@v4
-        with:
-          name: story-assets
-          path: staging/
-          if-no-files-found: error
-
+        with: {name: story-assets, path: staging/, if-no-files-found: error}
   render:
-    name: Render scene ${{ matrix.scene }}
     needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    strategy:
-      fail-fast: false
-      max-parallel: 3
-      matrix:
-        scene: ${{ fromJson(needs.prepare.outputs.scene_list) }}
+    strategy: {fail-fast: false, max-parallel: 3, matrix: {scene: ${{ fromJson(needs.prepare.outputs.scene_list) }}}}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
-        with:
-          name: story-assets
-          path: staging
-      - name: Restore assets
+        with: {name: story-assets, path: staging}
+      - run: mkdir -p content/stories assets/animations output/scenes && cp staging/story.json "content/stories/${{ needs.prepare.outputs.story_id }}.json" && cp -r staging/animations/* assets/animations/ 2>/dev/null || true
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - name: Render cinematic frames
+        run: docker run --rm -v "$PWD:/work" -w /work blendergrid/blender:latest -b --python-exit-code 1 --python scripts/render/render_scene.py -- --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" --scene ${{ matrix.scene }} --out "output/scenes/scene${{ matrix.scene }}.mp4" --fps 15 --resolution-x 540 --resolution-y 960 --engine BLENDER_EEVEE --samples 8 --max-seconds 90 --no-encode
+      - name: Encode scene
         run: |
-          STORY_ID="${{ needs.prepare.outputs.story_id }}"
-          mkdir -p content/stories assets/animations output/scenes
-          cp staging/story.json "content/stories/${STORY_ID}.json"
-          if [ -d staging/animations ]; then cp -r staging/animations/* assets/animations/ 2>/dev/null || true; fi
-      - name: Install host FFmpeg
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-      - name: Render frames with Blender container
-        run: |
-          STORY_ID="${{ needs.prepare.outputs.story_id }}"
-          docker run --rm -v "$PWD:/work" -w /work blendergrid/blender:latest \
-            -b --python-exit-code 1 --python scripts/render/render_scene.py -- \
-            --story "content/stories/${STORY_ID}.json" \
-            --scene ${{ matrix.scene }} \
-            --out "output/scenes/scene${{ matrix.scene }}.mp4" \
-            --fps 15 --resolution-x 540 --resolution-y 960 \
-            --engine BLENDER_EEVEE --samples 8 --max-seconds 90 --no-encode
-      - name: Encode scene on GitHub runner
-        run: |
-          FRAME_DIR="output/scenes/.frames_scene${{ matrix.scene }}"
-          OUT="output/scenes/scene${{ matrix.scene }}.mp4"
-          test -d "$FRAME_DIR"
-          test "$(find "$FRAME_DIR" -type f -name 'frame*.jpg' | wc -l)" -gt 0
-          ffmpeg -y -hide_banner -loglevel error \
-            -framerate 15 -i "$FRAME_DIR/frame%04d.jpg" \
-            -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p \
-            -movflags +faststart "$OUT"
-          rm -rf "$FRAME_DIR"
-      - name: Validate scene
-        run: |
-          test -s "output/scenes/scene${{ matrix.scene }}.mp4"
-          ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "output/scenes/scene${{ matrix.scene }}.mp4"
+          FD="output/scenes/.frames_scene${{ matrix.scene }}"; OUT="output/scenes/scene${{ matrix.scene }}.mp4"; test "$(find "$FD" -type f -name 'frame*.jpg' | wc -l)" -gt 0
+          ffmpeg -y -hide_banner -loglevel error -framerate 15 -i "$FD/frame%04d.jpg" -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -movflags +faststart "$OUT"; rm -rf "$FD"
+      - run: test -s "output/scenes/scene${{ matrix.scene }}.mp4"
       - uses: actions/upload-artifact@v4
-        with:
-          name: scene-${{ matrix.scene }}
-          path: output/scenes/scene${{ matrix.scene }}.mp4
-          if-no-files-found: error
-
+        with: {name: scene-${{ matrix.scene }}, path: output/scenes/scene${{ matrix.scene }}.mp4, if-no-files-found: error}
   assemble:
-    name: Assemble final video + thumbnail
-    needs: [prepare, render]
+    needs: [prepare,render]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg && pip install -r requirements.txt
+        with: {python-version: '3.11'}
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg && pip install -r requirements.txt
       - uses: actions/download-artifact@v4
-        with:
-          name: story-assets
-          path: staging
+        with: {name: story-assets, path: staging}
       - uses: actions/download-artifact@v4
-        with:
-          pattern: scene-*
-          path: rendered
-          merge-multiple: false
-      - name: Restore working layout
-        run: |
-          STORY_ID="${{ needs.prepare.outputs.story_id }}"
-          mkdir -p content/stories output/scenes output/audio
-          cp staging/story.json "content/stories/${STORY_ID}.json"
-          cp staging/audio/*.mp3 output/audio/
-          find rendered -type f -name '*.mp4' -exec cp {} output/scenes/ \;
-      - name: Normalize scenes to Shorts
-        run: |
-          mkdir -p output/scenes/final
-          for f in output/scenes/scene*.mp4; do
-            base=$(basename "$f")
-            ffmpeg -y -hide_banner -loglevel error -i "$f" -vf "scale=1080:1920:flags=lanczos,fps=24,format=yuv420p" -c:v libx264 -preset veryfast -crf 18 -movflags +faststart "output/scenes/final/$base"
-          done
-          rm -f output/scenes/scene*.mp4
-          cp output/scenes/final/*.mp4 output/scenes/
-      - name: Composite
-        run: python scripts/assembly/composite.py --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" --audio output/audio --scenes output/scenes --out output/final.mp4
-      - name: Thumbnail
-        run: python scripts/assembly/thumbnail.py --video output/final.mp4 --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" --out output/thumbnail.jpg
-      - name: Validate final Shorts
-        run: |
-          test -s output/final.mp4
-          test -s output/thumbnail.jpg
-          test "$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 output/final.mp4)" = "1080"
-          test "$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 output/final.mp4)" = "1920"
-          ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 output/final.mp4
+        with: {pattern: scene-*, path: rendered, merge-multiple: false}
+      - run: mkdir -p content/stories output/scenes output/audio && cp staging/story.json "content/stories/${{ needs.prepare.outputs.story_id }}.json" && cp staging/audio/*.mp3 output/audio/ && find rendered -type f -name '*.mp4' -exec cp {} output/scenes/ \;
+      - run: mkdir -p output/scenes/final; for f in output/scenes/scene*.mp4; do b=$(basename "$f"); ffmpeg -y -hide_banner -loglevel error -i "$f" -vf "scale=1080:1920:flags=lanczos,fps=24,format=yuv420p" -c:v libx264 -preset veryfast -crf 18 -movflags +faststart "output/scenes/final/$b"; done; rm -f output/scenes/scene*.mp4; cp output/scenes/final/*.mp4 output/scenes/
+      - run: python scripts/assembly/composite.py --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" --audio output/audio --scenes output/scenes --out output/final.mp4
+      - run: python scripts/assembly/thumbnail.py --video output/final.mp4 --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" --out output/thumbnail.jpg
+      - run: test -s output/final.mp4 && test -s output/thumbnail.jpg && test "$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 output/final.mp4)" = 1080 && test "$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 output/final.mp4)" = 1920
       - uses: actions/upload-artifact@v4
-        with:
-          name: final
-          path: |
-            output/final.mp4
-            output/thumbnail.jpg
-            content/stories/${{ needs.prepare.outputs.story_id }}.json
-          if-no-files-found: error
-
+        with: {name: final, path: 'output/*', if-no-files-found: error}
   upload:
-    name: Upload to YouTube
-    needs: [prepare, assemble]
+    needs: [prepare,assemble]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+        with: {python-version: '3.11'}
+      - run: pip install -r requirements.txt
       - uses: actions/download-artifact@v4
-        with:
-          name: final
-          path: .
-      - name: Verify package
-        run: |
-          test -s output/final.mp4
-          test -s output/thumbnail.jpg
-      - name: Upload video
-        run: python scripts/upload/upload_youtube.py --video output/final.mp4 --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" --thumbnail output/thumbnail.jpg
+        with: {name: final, path: output}
+      - run: python scripts/upload/upload_youtube.py --video output/final.mp4 --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" --thumbnail output/thumbnail.jpg
