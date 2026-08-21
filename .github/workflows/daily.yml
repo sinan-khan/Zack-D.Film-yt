@@ -102,6 +102,13 @@ jobs:
           if [ -d staging/animations ]; then cp -r staging/animations/* assets/animations/ 2>/dev/null || true; fi
       - name: Install host FFmpeg
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - name: Download character model
+        run: |
+          set -euo pipefail
+          mkdir -p assets/characters
+          curl -sL --fail -o assets/characters/hero.fbx \
+            "https://github.com/sinan-khan/Zack-D.Film-yt/releases/download/hero.fbx/hero.fbx.fbx"
+          test -s assets/characters/hero.fbx
       - name: Render frames with Blender container
         run: |
           set -euo pipefail
