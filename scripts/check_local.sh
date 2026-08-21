@@ -1,40 +1,37 @@
 #!/usr/bin/env bash
 # Fast local sanity check. No Blender, no API keys, no YouTube needed.
-# Use this during development; run the same checks in CI via act:
-#   act -W .github/workflows/test.yml
 set -euo pipefail
 
 echo "==> syntax check"
-for f in scripts/**/*.py; do
-  python3 -m py_compile "$f"
-done
+for f in scripts/**/*.py; do python3 -m py_compile "$f"; done
 echo "    OK"
 
 echo "==> offline story generation"
-python3 scripts/content/generate_story.py --prompt content/prompts/story-001.txt \
-  --out /tmp/zackd-story.json --no-llm
+rm -rf /tmp/zackd-preview && mkdir -p /tmp/zackd-preview
+python3 scripts/content/generate_story.py --prompt content/prompts/story-001.txt --out /tmp/zackd-preview/story.json --no-llm
+
+echo "==> animation manifest"
+python3 scripts/animation/build_animation_manifest.py --story /tmp/zackd-preview/story.json --out /tmp/zackd-preview/animation_manifest.json
+python3 scripts/animation/validate_animation_manifest.py --manifest /tmp/zackd-preview/animation_manifest.json
 
 echo "==> plan schema"
-python3 - <<'EOF'
+python3 - <<'PY'
 import json
-story = json.load(open("/tmp/zackd-story.json"))
-assert story["title"], "no title"
-assert len(story["scenes"]) >= 1, "no scenes"
-for s in story["scenes"]:
-    assert s["narration"], "missing narration"
-    assert s["duration_seconds"] > 0, "bad duration"
-    assert s["camera"], "missing camera"
-total = sum(s["duration_seconds"] for s in story["scenes"])
-assert 40 <= total <= 240, f"total {total}s out of range"
+story = json.load(open('/tmp/zackd-preview/story.json'))
+assert story['title'] and story['scenes']
+for s in story['scenes']:
+    assert s['narration'] and s['duration_seconds'] > 0 and s['camera'] and s['animation_prompt']
+total=sum(s['duration_seconds'] for s in story['scenes'])
+assert 40 <= total <= 240
 print(f"    OK: '{story['title']}' {len(story['scenes'])} scenes, {total}s")
-EOF
+PY
 
 echo "==> workflow YAML"
-python3 - <<'EOF'
+python3 - <<'PY'
 import glob, yaml
-for f in glob.glob(".github/workflows/*.yml"):
+for f in glob.glob('.github/workflows/*.yml'):
     yaml.safe_load(open(f))
     print(f"    OK: {f}")
-EOF
+PY
 
 echo "ALL LOCAL CHECKS PASSED"
