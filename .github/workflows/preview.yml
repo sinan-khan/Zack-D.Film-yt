@@ -1,0 +1,88 @@
+name: Preview Video - No YouTube Upload
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    name: Build reviewable Zack video
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      STORY_LLM_API_KEY: ${{ secrets.STORY_LLM_API_KEY }}
+      STORY_LLM_BASE_URL: ${{ secrets.STORY_LLM_BASE_URL }}
+      STORY_LLM_MODEL: ${{ secrets.STORY_LLM_MODEL }}
+      TEXT2MOTION_API_KEY: ${{ secrets.TEXT2MOTION_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg && pip install -r requirements.txt
+      - name: Generate story
+        run: python scripts/content/generate_story.py --prompt content/prompts/story-001.txt --out staging/story.json
+      - name: Generate narration and lock scene durations
+        run: python scripts/assembly/generate_tts.py --story staging/story.json --out staging/audio
+      - name: Build animation manifest
+        run: python scripts/animation/build_animation_manifest.py --story staging/story.json --out staging/animation_manifest.json
+      - name: Validate animation manifest
+        run: python scripts/animation/validate_animation_manifest.py --manifest staging/animation_manifest.json
+      - name: Generate Text2Motion assets when a key is available
+        if: env.TEXT2MOTION_API_KEY != ''
+        run: |
+          python - <<'PY'
+          import json, os, subprocess
+          story=json.load(open('staging/story.json'))
+          for s in story['scenes']:
+              if s.get('animation_source') == 'text2motion':
+                  out=f"staging/animations/{story['id']}/scene{s['id']}.fbx"
+                  os.makedirs(os.path.dirname(out), exist_ok=True)
+                  subprocess.run(['python','scripts/animation/text2motion.py','--prompt',s['animation_prompt'],'--out',out],check=True)
+          PY
+      - name: Render all scenes with Blender
+        run: |
+          mkdir -p content/stories assets/animations output/scenes
+          STORY_ID="$(python -c "import json; print(json.load(open('staging/story.json'))['id'])")"
+          cp staging/story.json "content/stories/${STORY_ID}.json"
+          if [ -d staging/animations ]; then cp -r staging/animations/* assets/animations/ 2>/dev/null || true; fi
+          mapfile -t SCENES < <(python -c "import json; print(*[s['id'] for s in json.load(open('staging/story.json'))['scenes']], sep='\n')")
+          for scene in "${SCENES[@]}"; do
+            docker run --rm -v "$PWD:/work" -w /work blendergrid/blender:latest \
+              -b --python-exit-code 1 --python scripts/render/render_scene.py -- \
+              --story "content/stories/${STORY_ID}.json" --scene "$scene" \
+              --out "output/scenes/scene${scene}.mp4" --fps 15 --resolution-x 540 --resolution-y 960 \
+              --engine BLENDER_EEVEE --samples 8 --max-seconds 90 --no-encode
+            FRAME_DIR="output/scenes/.frames_scene${scene}"
+            test "$(find "$FRAME_DIR" -type f -name 'frame*.jpg' | wc -l)" -gt 0
+            ffmpeg -y -hide_banner -loglevel error -framerate 15 -i "$FRAME_DIR/frame%04d.jpg" \
+              -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -movflags +faststart "output/scenes/scene${scene}.mp4"
+            rm -rf "$FRAME_DIR"
+          done
+      - name: Assemble final video
+        run: |
+          mkdir -p output/audio
+          cp staging/audio/*.mp3 output/audio/
+          python scripts/assembly/composite.py --story "content/stories/$(python -c "import json; print(json.load(open('staging/story.json'))['id'])").json" \
+            --audio output/audio --scenes output/scenes --out output/final.mp4
+      - name: Generate thumbnail
+        run: python scripts/assembly/thumbnail.py --video output/final.mp4 --story "content/stories/$(python -c "import json; print(json.load(open('staging/story.json'))['id'])").json" --out output/thumbnail.jpg
+      - name: Final quality gate
+        run: |
+          test -s output/final.mp4
+          test -s output/thumbnail.jpg
+          ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 output/final.mp4
+          ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 output/final.mp4
+      - name: Upload preview artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zack-preview
+          path: |
+            output/final.mp4
+            output/thumbnail.jpg
+            staging/story.json
+            staging/animation_manifest.json
+          if-no-files-found: error
