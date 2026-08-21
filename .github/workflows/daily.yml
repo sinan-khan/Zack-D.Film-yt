@@ -26,7 +26,7 @@ env:
 
 jobs:
   prepare:
-    name: Write story, narrate, fetch animations
+    name: Write story, narrate, plan animation
     runs-on: ubuntu-latest
     outputs:
       story_id: ${{ steps.plan.outputs.story_id }}
@@ -37,13 +37,12 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg && pip install -r requirements.txt
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg && pip install -r requirements.txt
       - name: Pick rotating story prompt
         id: plan
         run: |
           mapfile -t PROMPTS < <(find content/prompts -maxdepth 1 -type f -name '*.txt' | sort)
-          COUNT=${#PROMPTS[@]}
-          test "$COUNT" -gt 0 || exit 1
+          COUNT=${#PROMPTS[@]}; test "$COUNT" -gt 0
           INDEX=$(( $(date -u +%s) / 43200 % COUNT ))
           STORY="${PROMPTS[$INDEX]}"
           STORY_ID="$(basename "$STORY" .txt)-$(date -u +%Y%m%d-%H%M)"
@@ -53,10 +52,14 @@ jobs:
         run: python scripts/content/generate_story.py --prompt "$STORY" --out staging/story.json
       - name: Generate narration
         run: python scripts/assembly/generate_tts.py --story staging/story.json --out staging/audio
+      - name: Build animation manifest
+        run: python scripts/animation/build_animation_manifest.py --story staging/story.json --out staging/animation_manifest.json
+      - name: Validate animation manifest
+        run: python scripts/animation/validate_animation_manifest.py --manifest staging/animation_manifest.json
       - name: Fetch Text2Motion animations
         if: env.TEXT2MOTION_API_KEY != ''
         run: |
-          python - <<'EOF'
+          python - <<'PY'
           import json, os, subprocess
           story=json.load(open('staging/story.json'))
           for s in story['scenes']:
@@ -64,16 +67,16 @@ jobs:
                   out=f"staging/animations/{story['id']}/scene{s['id']}.fbx"
                   os.makedirs(os.path.dirname(out), exist_ok=True)
                   subprocess.run(['python','scripts/animation/text2motion.py','--prompt',s['animation_prompt'],'--out',out],check=True)
-          EOF
+          PY
       - name: Report scenes
         id: scenes
         run: |
-          python - <<'EOF'
+          python - <<'PY'
           import json,os
           story=json.load(open('staging/story.json'))
           with open(os.environ['GITHUB_OUTPUT'],'a') as f:
               f.write('scene_list='+json.dumps([str(s['id']) for s in story['scenes']])+'\n')
-          EOF
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: story-assets
@@ -109,21 +112,15 @@ jobs:
           STORY_ID="${{ needs.prepare.outputs.story_id }}"
           docker run --rm -v "$PWD:/work" -w /work blendergrid/blender:latest \
             -b --python-exit-code 1 --python scripts/render/render_scene.py -- \
-            --story "content/stories/${STORY_ID}.json" \
-            --scene ${{ matrix.scene }} \
-            --out "output/scenes/scene${{ matrix.scene }}.mp4" \
-            --fps 15 --resolution-x 540 --resolution-y 960 \
+            --story "content/stories/${STORY_ID}.json" --scene ${{ matrix.scene }} \
+            --out "output/scenes/scene${{ matrix.scene }}.mp4" --fps 15 --resolution-x 540 --resolution-y 960 \
             --engine BLENDER_EEVEE --samples 8 --max-seconds 90 --no-encode
-      - name: Encode scene on GitHub runner
+      - name: Encode scene
         run: |
-          FRAME_DIR="output/scenes/.frames_scene${{ matrix.scene }}"
-          OUT="output/scenes/scene${{ matrix.scene }}.mp4"
-          test -d "$FRAME_DIR"
-          test "$(find "$FRAME_DIR" -type f -name 'frame*.jpg' | wc -l)" -gt 0
-          ffmpeg -y -hide_banner -loglevel error \
-            -framerate 15 -i "$FRAME_DIR/frame%04d.jpg" \
-            -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p \
-            -movflags +faststart "$OUT"
+          FRAME_DIR="output/scenes/.frames_scene${{ matrix.scene }}"; OUT="output/scenes/scene${{ matrix.scene }}.mp4"
+          test -d "$FRAME_DIR"; test "$(find "$FRAME_DIR" -type f -name 'frame*.jpg' | wc -l)" -gt 0
+          ffmpeg -y -hide_banner -loglevel error -framerate 15 -i "$FRAME_DIR/frame%04d.jpg" \
+            -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -movflags +faststart "$OUT"
           rm -rf "$FRAME_DIR"
       - name: Validate scene
         run: |
@@ -145,7 +142,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg && pip install -r requirements.txt
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg && pip install -r requirements.txt
       - uses: actions/download-artifact@v4
         with:
           name: story-assets
@@ -162,7 +159,7 @@ jobs:
           cp staging/story.json "content/stories/${STORY_ID}.json"
           cp staging/audio/*.mp3 output/audio/
           find rendered -type f -name '*.mp4' -exec cp {} output/scenes/ \;
-      - name: Normalize scenes to Shorts
+      - name: Normalize scenes
         run: |
           mkdir -p output/scenes/final
           for f in output/scenes/scene*.mp4; do
@@ -177,8 +174,7 @@ jobs:
         run: python scripts/assembly/thumbnail.py --video output/final.mp4 --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" --out output/thumbnail.jpg
       - name: Validate final Shorts
         run: |
-          test -s output/final.mp4
-          test -s output/thumbnail.jpg
+          test -s output/final.mp4; test -s output/thumbnail.jpg
           test "$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 output/final.mp4)" = "1080"
           test "$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 output/final.mp4)" = "1920"
           ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 output/final.mp4
@@ -189,6 +185,7 @@ jobs:
             output/final.mp4
             output/thumbnail.jpg
             content/stories/${{ needs.prepare.outputs.story_id }}.json
+            staging/animation_manifest.json
           if-no-files-found: error
 
   upload:
@@ -207,8 +204,6 @@ jobs:
           name: final
           path: .
       - name: Verify package
-        run: |
-          test -s output/final.mp4
-          test -s output/thumbnail.jpg
+        run: test -s output/final.mp4 && test -s output/thumbnail.jpg
       - name: Upload video
         run: python scripts/upload/upload_youtube.py --video output/final.mp4 --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" --thumbnail output/thumbnail.jpg
