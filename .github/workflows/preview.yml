@@ -45,6 +45,7 @@ jobs:
           PY
       - name: Render all scenes with Blender
         run: |
+          set -euo pipefail
           mkdir -p content/stories assets/animations output/scenes
           STORY_ID="$(python -c "import json; print(json.load(open('staging/story.json'))['id'])")"
           cp staging/story.json "content/stories/${STORY_ID}.json"
@@ -57,31 +58,50 @@ jobs:
               --out "output/scenes/scene${scene}.mp4" --fps 15 --resolution-x 540 --resolution-y 960 \
               --engine BLENDER_EEVEE --samples 8 --max-seconds 90 --no-encode
             FRAME_DIR="output/scenes/.frames_scene${scene}"
-            test "$(find "$FRAME_DIR" -type f -name 'frame*.jpg' | wc -l)" -gt 0
+            COUNT="$(find "$FRAME_DIR" -type f -name 'frame*.jpg' | wc -l)"
+            test "$COUNT" -gt 0
             ffmpeg -y -hide_banner -loglevel error -framerate 15 -i "$FRAME_DIR/frame%04d.jpg" \
               -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -movflags +faststart "output/scenes/scene${scene}.mp4"
+            test -s "output/scenes/scene${scene}.mp4"
             rm -rf "$FRAME_DIR"
           done
       - name: Assemble final video
         run: |
+          set -euo pipefail
           mkdir -p output/audio
           cp staging/audio/*.mp3 output/audio/
-          python scripts/assembly/composite.py --story "content/stories/$(python -c "import json; print(json.load(open('staging/story.json'))['id'])").json" \
-            --audio output/audio --scenes output/scenes --out output/final.mp4
+          STORY_ID="$(python -c "import json; print(json.load(open('staging/story.json'))['id'])")"
+          python scripts/assembly/composite.py --story "content/stories/${STORY_ID}.json" --audio output/audio --scenes output/scenes --out output/final.mp4
       - name: Generate thumbnail
-        run: python scripts/assembly/thumbnail.py --video output/final.mp4 --story "content/stories/$(python -c "import json; print(json.load(open('staging/story.json'))['id'])").json" --out output/thumbnail.jpg
+        run: |
+          STORY_ID="$(python -c "import json; print(json.load(open('staging/story.json'))['id'])")"
+          python scripts/assembly/thumbnail.py --video output/final.mp4 --story "content/stories/${STORY_ID}.json" --out output/thumbnail.jpg
       - name: Final quality gate
         run: |
+          set -euo pipefail
           test -s output/final.mp4
           test -s output/thumbnail.jpg
-          ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 output/final.mp4
-          ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 output/final.mp4
+          WIDTH="$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 output/final.mp4)"
+          HEIGHT="$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 output/final.mp4)"
+          DURATION="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 output/final.mp4)"
+          AUDIO="$(ffprobe -v error -select_streams a:0 -show_entries stream=index -of csv=p=0 output/final.mp4 || true)"
+          test "$WIDTH" = "1080"
+          test "$HEIGHT" = "1920"
+          python - <<PY
+          d=float("$DURATION")
+          assert 40 <= d <= 100, f"unexpected duration: {d}"
+          PY
+          test -n "$AUDIO"
+          ffmpeg -v error -i output/final.mp4 -f null -
+          sha256sum output/final.mp4 > output/final.mp4.sha256
+          echo "Preview quality gate passed: ${WIDTH}x${HEIGHT}, ${DURATION}s, audio=${AUDIO}"
       - name: Upload preview artifact
         uses: actions/upload-artifact@v4
         with:
-          name: zack-preview
+          name: zack-preview-${{ github.run_id }}
           path: |
             output/final.mp4
+            output/final.mp4.sha256
             output/thumbnail.jpg
             staging/story.json
             staging/animation_manifest.json
