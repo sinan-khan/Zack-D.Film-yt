@@ -1,4 +1,4 @@
-name: Daily Short Production
+name: Visual QA Production
 on:
   schedule:
     - cron: "15 7 * * *"
@@ -14,8 +14,6 @@ env:
   STORY_LLM_MODEL: ${{ secrets.STORY_LLM_MODEL }}
   TEXT2MOTION_API_KEY: ${{ secrets.TEXT2MOTION_API_KEY }}
   MIXAMO_TOKEN: ${{ secrets.MIXAMO_TOKEN }}
-  YOUTUBE_CLIENT_SECRET_JSON: ${{ secrets.YOUTUBE_CLIENT_SECRET_JSON }}
-  YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
 jobs:
   prepare:
     runs-on: ubuntu-latest
@@ -29,11 +27,30 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg && pip install -r requirements.txt
       - id: plan
         run: |
-          mapfile -t PROMPTS < <(find content/prompts -maxdepth 1 -type f -name '*.txt' | sort); COUNT=${#PROMPTS[@]}; test "$COUNT" -gt 0
-          INDEX=$(( $(date -u +%s) / 43200 % COUNT )); STORY="${PROMPTS[$INDEX]}"; STORY_ID="$(basename "$STORY" .txt)-$(date -u +%Y%m%d-%H%M)"
+          mapfile -t PROMPTS < <(find content/prompts -maxdepth 1 -type f -name '*.txt' | sort)
+          COUNT=${#PROMPTS[@]}; test "$COUNT" -gt 0
+          INDEX=$(( $(date -u +%s) / 43200 % COUNT )); STORY="${PROMPTS[$INDEX]}"
+          STORY_ID="$(basename "$STORY" .txt)-$(date -u +%Y%m%d-%H%M)"
           echo "story_id=$STORY_ID" >> "$GITHUB_OUTPUT"; echo "STORY=$STORY" >> "$GITHUB_ENV"
+      - run: mkdir -p staging/audio staging/animations
       - run: python scripts/content/generate_story.py --prompt "$STORY" --out staging/story.json
       - run: python scripts/visual/build_visual_plan.py --story staging/story.json --out staging/story.json
+      - name: Validate visual plan before rendering
+        run: |
+          python - <<'PY'
+          import json
+          s=json.load(open('staging/story.json'))
+          plans={int(x['scene_id']):x for x in s.get('visual_plan',[])}
+          assert len(plans)==len(s['scenes']), 'visual plan missing scenes'
+          for sc in s['scenes']:
+              p=plans[int(sc['id'])]; shots=p.get('shots',[])
+              assert len(shots)>=3, f"scene {sc['id']} has fewer than 3 shots"
+              total=sum(float(x['duration']) for x in shots)
+              assert abs(total-float(sc.get('duration_seconds',20)))<0.1, f"scene {sc['id']} timing mismatch"
+              assert len({x.get('camera') for x in shots})>=2, f"scene {sc['id']} lacks camera variation"
+              assert len({x.get('camera_move') for x in shots})>=2, f"scene {sc['id']} lacks motion variation"
+          print(f"validated {len(s['scenes'])} scenes")
+          PY
       - run: python scripts/assembly/generate_tts.py --story staging/story.json --out staging/audio
       - run: python scripts/animation/fetch_animations.py --story staging/story.json --out staging/animations
       - id: scenes
@@ -55,8 +72,10 @@ jobs:
         run: docker run --rm -v "$PWD:/work" -w /work blendergrid/blender:latest -b --python-exit-code 1 --python scripts/render/render_scene.py -- --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" --scene ${{ matrix.scene }} --out "output/scenes/scene${{ matrix.scene }}.mp4" --fps 15 --resolution-x 540 --resolution-y 960 --engine BLENDER_EEVEE --samples 8 --max-seconds 90 --no-encode
       - name: Encode scene
         run: |
-          FD="output/scenes/.frames_scene${{ matrix.scene }}"; OUT="output/scenes/scene${{ matrix.scene }}.mp4"; test "$(find "$FD" -type f -name 'frame*.jpg' | wc -l)" -gt 0
-          ffmpeg -y -hide_banner -loglevel error -framerate 15 -i "$FD/frame%04d.jpg" -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -movflags +faststart "$OUT"; rm -rf "$FD"
+          FD="output/scenes/.frames_scene${{ matrix.scene }}"; OUT="output/scenes/scene${{ matrix.scene }}.mp4"
+          COUNT=$(find "$FD" -type f -name 'frame*.jpg' | wc -l); test "$COUNT" -gt 0
+          ffmpeg -y -hide_banner -loglevel error -framerate 15 -i "$FD/frame%04d.jpg" -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -movflags +faststart "$OUT"
+          rm -rf "$FD"
       - run: test -s "output/scenes/scene${{ matrix.scene }}.mp4"
       - uses: actions/upload-artifact@v4
         with: {name: scene-${{ matrix.scene }}, path: output/scenes/scene${{ matrix.scene }}.mp4, if-no-files-found: error}
@@ -73,20 +92,24 @@ jobs:
       - uses: actions/download-artifact@v4
         with: {pattern: scene-*, path: rendered, merge-multiple: false}
       - run: mkdir -p content/stories output/scenes output/audio && cp staging/story.json "content/stories/${{ needs.prepare.outputs.story_id }}.json" && cp staging/audio/*.mp3 output/audio/ && find rendered -type f -name '*.mp4' -exec cp {} output/scenes/ \;
-      - run: mkdir -p output/scenes/final; for f in output/scenes/scene*.mp4; do b=$(basename "$f"); ffmpeg -y -hide_banner -loglevel error -i "$f" -vf "scale=1080:1920:flags=lanczos,fps=24,format=yuv420p" -c:v libx264 -preset veryfast -crf 18 -movflags +faststart "output/scenes/final/$b"; done; rm -f output/scenes/scene*.mp4; cp output/scenes/final/*.mp4 output/scenes/
+      - run: |
+          mkdir -p output/scenes/final
+          for f in output/scenes/scene*.mp4; do
+            b=$(basename "$f")
+            ffmpeg -y -hide_banner -loglevel error -i "$f" -vf "scale=1080:1920:flags=lanczos,fps=24,format=yuv420p" -c:v libx264 -preset veryfast -crf 18 -movflags +faststart "output/scenes/final/$b"
+          done
+          rm -f output/scenes/scene*.mp4; cp output/scenes/final/*.mp4 output/scenes/
       - run: python scripts/assembly/composite.py --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" --audio output/audio --scenes output/scenes --out output/final.mp4
       - run: python scripts/assembly/thumbnail.py --video output/final.mp4 --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" --out output/thumbnail.jpg
-      - run: test -s output/final.mp4 && test -s output/thumbnail.jpg && test "$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 output/final.mp4)" = 1080 && test "$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 output/final.mp4)" = 1920
+      - name: Final QA gate
+        run: |
+          test -s output/final.mp4
+          test -s output/thumbnail.jpg
+          W=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 output/final.mp4)
+          H=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 output/final.mp4)
+          test "$W" = 1080 && test "$H" = 1920
+          echo "QA artifact ready: output/final.mp4"
       - uses: actions/upload-artifact@v4
-        with: {name: final, path: 'output/*', if-no-files-found: error}
-  upload:
-    needs: [prepare,assemble]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: {python-version: '3.11'}
-      - run: pip install -r requirements.txt
-      - uses: actions/download-artifact@v4
-        with: {name: final, path: output}
-      - run: python scripts/upload/upload_youtube.py --video output/final.mp4 --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" --thumbnail output/thumbnail.jpg
+        with: {name: final-QA, path: 'output/*', if-no-files-found: error}
+  # IMPORTANT: there is intentionally NO YouTube upload job here.
+  # Uploading will be added only after the user approves a generated QA video.
