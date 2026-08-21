@@ -4,7 +4,7 @@ on:
   schedule:
     - cron: "15 7 * * *"
     - cron: "15 19 * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
   repository_dispatch:
     types: [produce]
 
@@ -34,18 +34,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+        with: {python-version: "3.11"}
       - name: Install dependencies
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg && pip install -r requirements.txt
       - name: Pick rotating story prompt
         id: plan
         run: |
+          set -euo pipefail
           mapfile -t PROMPTS < <(find content/prompts -maxdepth 1 -type f -name '*.txt' | sort)
           COUNT=${#PROMPTS[@]}; test "$COUNT" -gt 0
           INDEX=$(( $(date -u +%s) / 43200 % COUNT ))
           STORY="${PROMPTS[$INDEX]}"
-          STORY_ID="$(basename "$STORY" .txt)-$(date -u +%Y%m%d-%H%M)"
+          STORY_ID="$(basename "$STORY" .txt)-$(sha256sum "$STORY" | cut -c1-8)-$(date -u +%Y%m%d-%H%M)"
           echo "story_id=${STORY_ID}" >> "$GITHUB_OUTPUT"
           echo "STORY=${STORY}" >> "$GITHUB_ENV"
       - name: Generate story
@@ -74,14 +74,10 @@ jobs:
           python - <<'PY'
           import json,os
           story=json.load(open('staging/story.json'))
-          with open(os.environ['GITHUB_OUTPUT'],'a') as f:
-              f.write('scene_list='+json.dumps([str(s['id']) for s in story['scenes']])+'\n')
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f: f.write('scene_list='+json.dumps([str(s['id']) for s in story['scenes']])+'\n')
           PY
       - uses: actions/upload-artifact@v4
-        with:
-          name: story-assets
-          path: staging/
-          if-no-files-found: error
+        with: {name: story-assets, path: staging/, if-no-files-found: error}
 
   render:
     name: Render scene ${{ matrix.scene }}
@@ -96,11 +92,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
-        with:
-          name: story-assets
-          path: staging
+        with: {name: story-assets, path: staging}
       - name: Restore assets
         run: |
+          set -euo pipefail
           STORY_ID="${{ needs.prepare.outputs.story_id }}"
           mkdir -p content/stories assets/animations output/scenes
           cp staging/story.json "content/stories/${STORY_ID}.json"
@@ -109,6 +104,7 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
       - name: Render frames with Blender container
         run: |
+          set -euo pipefail
           STORY_ID="${{ needs.prepare.outputs.story_id }}"
           docker run --rm -v "$PWD:/work" -w /work blendergrid/blender:latest \
             -b --python-exit-code 1 --python scripts/render/render_scene.py -- \
@@ -117,20 +113,13 @@ jobs:
             --engine BLENDER_EEVEE --samples 8 --max-seconds 90 --no-encode
       - name: Encode scene
         run: |
+          set -euo pipefail
           FRAME_DIR="output/scenes/.frames_scene${{ matrix.scene }}"; OUT="output/scenes/scene${{ matrix.scene }}.mp4"
-          test -d "$FRAME_DIR"; test "$(find "$FRAME_DIR" -type f -name 'frame*.jpg' | wc -l)" -gt 0
-          ffmpeg -y -hide_banner -loglevel error -framerate 15 -i "$FRAME_DIR/frame%04d.jpg" \
-            -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -movflags +faststart "$OUT"
-          rm -rf "$FRAME_DIR"
-      - name: Validate scene
-        run: |
-          test -s "output/scenes/scene${{ matrix.scene }}.mp4"
-          ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "output/scenes/scene${{ matrix.scene }}.mp4"
+          COUNT="$(find "$FRAME_DIR" -type f -name 'frame*.jpg' | wc -l)"; test "$COUNT" -gt 0
+          ffmpeg -y -hide_banner -loglevel error -framerate 15 -i "$FRAME_DIR/frame%04d.jpg" -c:v libx264 -preset veryfast -crf 20 -pix_fmt yuv420p -movflags +faststart "$OUT"
+          test -s "$OUT"; rm -rf "$FRAME_DIR"
       - uses: actions/upload-artifact@v4
-        with:
-          name: scene-${{ matrix.scene }}
-          path: output/scenes/scene${{ matrix.scene }}.mp4
-          if-no-files-found: error
+        with: {name: scene-${{ matrix.scene }}, path: output/scenes/scene${{ matrix.scene }}.mp4, if-no-files-found: error}
 
   assemble:
     name: Assemble final video + thumbnail
@@ -139,21 +128,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+        with: {python-version: "3.11"}
       - name: Install dependencies
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg && pip install -r requirements.txt
       - uses: actions/download-artifact@v4
-        with:
-          name: story-assets
-          path: staging
+        with: {name: story-assets, path: staging}
       - uses: actions/download-artifact@v4
-        with:
-          pattern: scene-*
-          path: rendered
-          merge-multiple: false
+        with: {pattern: scene-*, path: rendered, merge-multiple: false}
       - name: Restore working layout
         run: |
+          set -euo pipefail
           STORY_ID="${{ needs.prepare.outputs.story_id }}"
           mkdir -p content/stories output/scenes output/audio
           cp staging/story.json "content/stories/${STORY_ID}.json"
@@ -161,28 +145,30 @@ jobs:
           find rendered -type f -name '*.mp4' -exec cp {} output/scenes/ \;
       - name: Normalize scenes
         run: |
+          set -euo pipefail
           mkdir -p output/scenes/final
-          for f in output/scenes/scene*.mp4; do
-            base=$(basename "$f")
-            ffmpeg -y -hide_banner -loglevel error -i "$f" -vf "scale=1080:1920:flags=lanczos,fps=24,format=yuv420p" -c:v libx264 -preset veryfast -crf 18 -movflags +faststart "output/scenes/final/$base"
-          done
-          rm -f output/scenes/scene*.mp4
-          cp output/scenes/final/*.mp4 output/scenes/
+          for f in output/scenes/scene*.mp4; do base=$(basename "$f"); ffmpeg -y -hide_banner -loglevel error -i "$f" -vf "scale=1080:1920:flags=lanczos,fps=24,format=yuv420p" -c:v libx264 -preset veryfast -crf 18 -movflags +faststart "output/scenes/final/$base"; done
+          rm -f output/scenes/scene*.mp4; cp output/scenes/final/*.mp4 output/scenes/
       - name: Composite
         run: python scripts/assembly/composite.py --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" --audio output/audio --scenes output/scenes --out output/final.mp4
       - name: Thumbnail
         run: python scripts/assembly/thumbnail.py --video output/final.mp4 --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" --out output/thumbnail.jpg
-      - name: Validate final Shorts
+      - name: Final quality gate
         run: |
+          set -euo pipefail
           test -s output/final.mp4; test -s output/thumbnail.jpg
-          test "$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 output/final.mp4)" = "1080"
-          test "$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 output/final.mp4)" = "1920"
-          ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 output/final.mp4
+          W=$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 output/final.mp4); H=$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 output/final.mp4); D=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 output/final.mp4); A=$(ffprobe -v error -select_streams a:0 -show_entries stream=index -of csv=p=0 output/final.mp4 || true)
+          test "$W" = "1080"; test "$H" = "1920"; test -n "$A"
+          python -c "d=float('$D'); assert 40 <= d <= 100, d"
+          ffmpeg -v error -i output/final.mp4 -f null -
+          sha256sum output/final.mp4 > output/final.mp4.sha256
+          echo "Quality gate passed: ${W}x${H}, ${D}s, audio=${A}"
       - uses: actions/upload-artifact@v4
         with:
           name: final
           path: |
             output/final.mp4
+            output/final.mp4.sha256
             output/thumbnail.jpg
             content/stories/${{ needs.prepare.outputs.story_id }}.json
             staging/animation_manifest.json
@@ -195,15 +181,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+        with: {python-version: "3.11"}
       - name: Install dependencies
         run: pip install -r requirements.txt
       - uses: actions/download-artifact@v4
-        with:
-          name: final
-          path: .
-      - name: Verify package
-        run: test -s output/final.mp4 && test -s output/thumbnail.jpg
+        with: {name: final, path: .}
+      - name: Verify package before upload
+        run: |
+          set -euo pipefail
+          test -s output/final.mp4; test -s output/thumbnail.jpg; test -s output/final.mp4.sha256
+          sha256sum -c output/final.mp4.sha256
+          ffmpeg -v error -i output/final.mp4 -f null -
       - name: Upload video
         run: python scripts/upload/upload_youtube.py --video output/final.mp4 --story "content/stories/${{ needs.prepare.outputs.story_id }}.json" --thumbnail output/thumbnail.jpg
