@@ -117,9 +117,11 @@ def main():
     description = story.get("description") or ""
     tags = story.get("tags") or ["3danimation", "shorts"]
 
-    # Required CC-BY-4.0 attribution when Text2Motion was used.
+    # Required CC-BY-4.0 attribution whenever Text2Motion was actually used,
+    # regardless of whether the story text itself came from an LLM or the
+    # offline template - those are independent things.
     sources = {s.get("animation_source") for s in story["scenes"]}
-    if "text2motion" in sources and story.get("source") != "offline-template":
+    if "text2motion" in sources:
         description += "\n\n" + cfg.get("credits", {}).get("text2motion", "")
 
     youtube_cfg = cfg.get("youtube", {})
