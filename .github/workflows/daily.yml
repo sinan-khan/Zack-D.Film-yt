@@ -109,6 +109,23 @@ jobs:
           curl -sL --fail -o assets/characters/hero.fbx \
             "https://github.com/sinan-khan/Zack-D.Film-yt/releases/download/hero.fbx/hero.fbx.fbx"
           test -s assets/characters/hero.fbx
+      - name: Download Mixamo animation library
+        run: |
+          set -euo pipefail
+          mkdir -p assets/animations/mixamo
+          BASE="https://github.com/sinan-khan/Zack-D.Film-yt/releases/download/mixamo-animations"
+          for CLIP in climbing stretching looking-around sitting-on-ground walking waving leaning-on-wall talking writing; do
+            DEST="assets/animations/mixamo/${CLIP}.fbx"
+            if curl -sL --fail -o "$DEST" "${BASE}/${CLIP}.fbx"; then
+              :
+            elif curl -sL --fail -o "$DEST" "${BASE}/${CLIP}.fbx.fbx"; then
+              echo "note: ${CLIP}.fbx was uploaded as ${CLIP}.fbx.fbx - fetched that instead"
+            else
+              echo "::error::could not find ${CLIP}.fbx or ${CLIP}.fbx.fbx in the mixamo-animations release"
+              exit 1
+            fi
+            test -s "$DEST"
+          done
       - name: Render frames with Blender container
         run: |
           set -euo pipefail
