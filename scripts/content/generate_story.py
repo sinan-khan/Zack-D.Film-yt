@@ -43,6 +43,9 @@ def offline_story(prompt_text, story_id):
     return story
 
 
+def slugify(text): return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40]
+
+
 def validate(plan):
     assert isinstance(plan.get("title"), str) and plan["title"], "missing title"
     assert isinstance(plan.get("scenes"), list) and plan["scenes"], "no scenes"
@@ -53,14 +56,18 @@ def validate(plan):
         scene.setdefault("mood", "neutral studio"); scene.setdefault("setting", scene["mood"])
         scene.setdefault("animation_prompt", "a figure standing and looking around")
         scene.setdefault("animation_source", "mixamo")
+        # Mixamo has no public API, so per-scene motion comes from a fixed
+        # library of animations named after Mixamo's own clip names,
+        # pre-downloaded once and hosted as GitHub Release assets (see
+        # scripts/animation/README - download step in the render job).
+        # animation_name -> assets/animations/mixamo/<slug>.fbx
+        if scene["animation_source"] == "mixamo" and scene.get("animation_name") and not scene.get("animation_file"):
+            scene["animation_file"] = f"assets/animations/mixamo/{slugify(scene['animation_name'])}.fbx"
     total = sum(float(s["duration_seconds"]) for s in plan["scenes"])
     if total > 240:
         scale = 240.0 / total
         for s in plan["scenes"]: s["duration_seconds"] = max(12, int(s["duration_seconds"] * scale))
     return plan
-
-
-def slugify(text): return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:40]
 
 
 def main():
